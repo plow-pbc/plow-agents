@@ -15,7 +15,12 @@ tenant gets — there is no local mode to drift.
 
 ## Run locally
 
-Docker, and a phone that can text.
+Docker, a phone that can text — and a Plow API that answers
+`GET /v1/agents/cloud/me`. The agent is told two lines and asks Plow for the
+rest of its identity through that endpoint, so until it ships
+([plow-pbc/plow#1666](https://github.com/plow-pbc/plow/pull/1666)) this flow
+cannot boot against `api.plow.co`: the agent comes up, asks, is answered
+`404`, and refuses to start. A stack that already has the endpoint works today.
 
 ```sh
 export PLOW_AGENT_IMAGE=public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>
@@ -26,10 +31,17 @@ docker compose up -d   # boots the agent
 `plow-activate` starts a Plow activation, prints the code and the number to
 text it to, waits for that text, and writes the credential file itself at mode
 600. It needs python3 and nothing else. Before writing anything it narrows its
-own credential to that agent's line, so what lands on disk reaches this agent's
-chats and Plow's inference and nothing else on the account; if that narrowing
-does not verify, the credential is stripped of every grant it has and no file
-is written. Prompts and progress go to stderr, and the token is never printed.
+own credential to that agent's line — activation hands back an account-wide one
+— so what lands on disk reaches this agent's chats and Plow's inference and
+nothing else on the account. If that narrowing does not verify, the credential
+is stripped of every grant it has and no file is written. Prompts and progress
+go to stderr, and the token is never printed.
+
+That narrowing is not a nicety to skip by pasting a token in by hand. The image
+asks Plow who the credential belongs to, and an answer of "not this agent's" —
+a `401`, `403` or `404` — is definitive: no retry, no fallback, no boot. A
+credential that was never narrowed to a line fails closed by design, rather
+than running as something broader than the agent it belongs to.
 
 Then text the number the agent answers on, and it replies. `docker compose logs
 -f agent` is what it is doing.
