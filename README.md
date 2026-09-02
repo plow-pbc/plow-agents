@@ -9,10 +9,16 @@ any image meeting the contract works.
 ## The two credentials
 
 `plow-agents login` stores an **account** token in `~/.config/plow/token` (mode
-600). It lists, mints and revokes; it is yours and never leaves this machine.
-`mint` uses it to write an **agent** credential to `./plow-credentials`, scoped to
-one line — that line's chats and Plow's inference, nothing else. That second one
-is the only credential a container ever sees.
+600). It lists, mints and revokes, so of course it travels — over HTTPS, to Plow,
+which is what it is for. What it never does is enter a container: it stays on
+this machine and in your own hands. `mint` uses it to write an **agent**
+credential to `./plow-credentials`, scoped to one line — that line's chats and
+Plow's inference, nothing else. That second one is the only credential a
+container ever sees.
+
+`login` asks Plow for an assistant line only when this account has none. Once a
+token is here it reads `/v1/chats` first, and a login on an account that already
+holds a line just refreshes the token rather than being handed a second one.
 
 ```sh
 bin/plow-agents login          # prints a code; text it
@@ -27,10 +33,26 @@ reads it. No image is named in this repository on purpose: a tag here would
 quietly fall behind the one your Plow boots. They are `amd64` only today, so an
 Apple Silicon Mac emulates.
 
+To run an image Plow does not publish — one you built locally, say — set
+`PLOW_AGENT_IMAGE` in `.env` (or in the environment) yourself: `mint` finds it
+already chosen, keeps it, and does not read the provider catalog at all. Since
+`mint` writes that line itself, a `--provider` you actually type outranks it and
+goes back to the catalog.
+
+Minting again over an existing `./plow-credentials` revokes the key that file
+names before it writes the new one, so rotation never leaves a live token nobody
+holds a file for. A credential file `mint` cannot read a key id out of stops the
+run instead — revoke that one first.
+
 Both files land relative to the directory you run `mint` from — the one holding
 `compose.yml` — and it prints their absolute paths. `--out` puts the credential
 elsewhere, and then the mount in `compose.yml` has to name that path too.
-`--api-base` is the root the *agent* will use, without `/v1`.
+`--api-base` is the root *this tool* calls, without `/v1`; `--agent-api-base`
+is the one written into the credential for the *container* to call, and defaults
+to the same. They differ against a local stack: `http://127.0.0.1:8000` reaches
+your API from this machine but is the container's own loopback inside it. Use
+`--agent-api-base http://host.docker.internal:8000`, or join the agent to the
+API's compose network and name the API's service instead.
 
 Then text the number the agent answers on and it replies; `docker compose logs -f
 agent` is what it is doing. When you are done:

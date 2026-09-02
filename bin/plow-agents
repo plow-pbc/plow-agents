@@ -7,8 +7,9 @@
     plow-agents revoke           revoke the credential ./plow-credentials names
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
-revokes, and never leaves this machine. `mint` uses it for an AGENT credential
-scoped to one line -- the only one a container ever sees.
+revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
+container. `mint` uses it for an AGENT credential scoped to one line, and that
+second one is the only credential a container ever sees.
 """
 
 from __future__ import annotations
@@ -103,6 +104,37 @@ def write_private(path: str, body: str) -> str:
     return destination
 
 
+def read_key_id(path: str) -> str | None:
+    """The key id `mint` recorded in a credential file, or None if there is no
+    such file. A file that is there but names no single id stops the run: it is
+    a live credential this tool has no safe way to retire."""
+    try:
+        with open(path) as handle:
+            content = handle.read()
+    except OSError:
+        return None
+    ids = [line[len(KEY_ID_MARKER):].strip() for line in content.splitlines() if line.startswith(KEY_ID_MARKER)]
+    if len(ids) != 1 or not ids[0].isdigit():
+        die(f"{path} does not name exactly one key id -- run `plow-agents revoke` first, or revoke it in the Plow dashboard and delete the file")
+    return ids[0]
+
+
+def revoke_key(args: argparse.Namespace, key_id: str, token: str) -> None:
+    """Retire one key. A key Plow no longer knows is the state we were after."""
+    status, payload = request("DELETE", args.api_base + f"/v1/api-keys/{key_id}", token=token)
+    if status == 404:
+        return
+    if status // 100 != 2:
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        die(f"could not revoke key {key_id}: {status}" + (f": {detail}" if detail else ""))
+
+
+def strip_v1(base: str) -> str:
+    """An API root the agent can append its own `/v1` to."""
+    base = base.rstrip("/")
+    return base[: -len("/v1")] if base.endswith("/v1") else base
+
+
 def token_path(override: str | None) -> str:
     if override:
         return os.path.abspath(override)
@@ -122,9 +154,36 @@ def account_token(args: argparse.Namespace) -> str:
     return token
 
 
+def env_image(path: str) -> str | None:
+    """PLOW_AGENT_IMAGE as `.env` already sets it, if it does. Read from the
+    bottom: that is the line compose would use when the name repeats."""
+    try:
+        with open(path) as handle:
+            content = handle.read()
+    except OSError:
+        return None
+    for line in reversed(content.splitlines()):
+        if line.startswith("PLOW_AGENT_IMAGE="):
+            return line[len("PLOW_AGENT_IMAGE="):].strip() or None
+    return None
+
+
 def provider_image(args: argparse.Namespace, token: str) -> tuple[str, str]:
-    """The id and image of the provider `--provider` names. Plow ids one as
-    `<backend>:<variant>` (`exe:hermes`); either spelling is accepted."""
+    """The image to run, and where it came from.
+
+    An image already chosen -- PLOW_AGENT_IMAGE in the environment or in `.env`
+    -- is the answer, and the catalog is not consulted: that is how you run an
+    image this Plow does not publish, and how `mint` keeps working on a Plow too
+    old to answer for one. `mint` writes that variable itself, though, so a
+    `--provider` you actually typed outranks it -- otherwise the first mint
+    would be the last one that could ever change agent. With neither, it is the
+    image Plow publishes for the default provider, which Plow ids as
+    `<backend>:<variant>` (`exe:hermes`); either spelling is accepted.
+    """
+    pinned = os.environ.get("PLOW_AGENT_IMAGE", "").strip() or env_image(os.path.abspath(args.env_out))
+    if pinned and args.provider is None:
+        return "PLOW_AGENT_IMAGE was already set, so the provider catalog was not read", pinned
+    args.provider = args.provider or DEFAULT_PROVIDER
     catalog = call("GET", args.api_base, "/v1/agents/cloud/providers", token=token)
     if not isinstance(catalog, list) or not catalog:
         die("/v1/agents/cloud/providers answered no providers")
@@ -136,7 +195,7 @@ def provider_image(args: argparse.Namespace, token: str) -> tuple[str, str]:
             image = entry.get("image")
             if not image:
                 die(f"provider {identifier} publishes no image")
-            return identifier, image
+            return f"the image Plow publishes for {identifier}", image
     offered = ", ".join(sorted(entry.get("id") or "?" for entry in catalog))
     die(f"no provider {args.provider!r} on this Plow -- it offers {offered}")
 
@@ -155,10 +214,48 @@ def write_env_image(path: str, image: str) -> str:
 # --- verbs -----------------------------------------------------------------
 
 
+def account_lines(chats: object) -> dict[str, str]:
+    """The assistant lines a GET /v1/chats body shows, uid -> label.
+
+    A line is not listed in its own right: it is the identity the agent side of
+    a chat answers on, so the chats are where to read one off."""
+    seen: dict[str, str] = {}
+    for chat in chats.get("data", []) if isinstance(chats, dict) else []:
+        for participant in chat.get("participants", []):
+            line = participant.get("line") if participant.get("type") == "agent" else None
+            if isinstance(line, dict) and line.get("uid"):
+                seen.setdefault(line["uid"], line.get("provider_key") or "")
+    return seen
+
+
+def needs_line(args: argparse.Namespace) -> bool:
+    """Whether this account still has to be given an assistant line.
+
+    True whenever we cannot see otherwise -- no token on this machine, or one
+    Plow will not answer for. A login that cannot look is a first login, and a
+    first login is exactly the one provisioning is for."""
+    try:
+        with open(token_path(args.token_file)) as handle:
+            token = handle.read().strip()
+    except OSError:
+        return True
+    if not token:
+        return True
+    status, payload = request("GET", args.api_base + "/v1/chats", token=token)
+    if status // 100 != 2:
+        return True
+    return not account_lines(payload)
+
+
 def login(args: argparse.Namespace) -> None:
     # `provision_chat` asks for a line and a chat on it in the same handshake,
-    # which is how an account with no chats yet gets its first line.
-    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": args.name, "provision_chat": True})
+    # which is how an account with no chats yet gets its first line. Asking on
+    # every login would hand a second line to an account that already has one,
+    # so it is asked for only when we can see there is none.
+    provision = needs_line(args)
+    if not provision:
+        log("This account already holds a line, so this login only refreshes the token.")
+    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": args.name, "provision_chat": provision})
     code, secret, send_to = (payload.get(k, "") for k in ("display_code", "activation_secret", "send_to"))
     if not (code and secret and send_to):
         die("activation returned no code, secret or number")
@@ -185,15 +282,7 @@ def login(args: argparse.Namespace) -> None:
 
 
 def lines(args: argparse.Namespace) -> None:
-    # A line is not listed in its own right: it is the identity the agent side
-    # of a chat answers on, so the chats are where to read one off.
-    chats = call("GET", args.api_base, "/v1/chats", token=account_token(args))
-    seen: dict[str, str] = {}
-    for chat in chats.get("data", []) if isinstance(chats, dict) else []:
-        for participant in chat.get("participants", []):
-            line = participant.get("line") if participant.get("type") == "agent" else None
-            if isinstance(line, dict) and line.get("uid"):
-                seen.setdefault(line["uid"], line.get("provider_key") or "")
+    seen = account_lines(call("GET", args.api_base, "/v1/chats", token=account_token(args)))
     if not seen:
         log("No assistant lines on this account yet.")
         log("A line arrives with your first chat; text your Plow number to be given one.")
@@ -205,7 +294,15 @@ def lines(args: argparse.Namespace) -> None:
 def mint(args: argparse.Namespace) -> None:
     grant = args.line if args.line.startswith("line:") else f"line:{args.line}"
     account = account_token(args)
+    destination = os.path.abspath(args.out)
+    # Writing over a credential without retiring its key would leave a live
+    # token no file on this machine names. So the old key goes first -- read
+    # before anything can fail, revoked as late as possible before the new one.
+    superseded = read_key_id(destination)
     provider, image = provider_image(args, account)
+    if superseded is not None:
+        revoke_key(args, superseded, account)
+        log(f"Revoked key {superseded}, the one {destination} named.")
     body = {"name": args.name, "scopes": AGENT_SCOPES, "chat_uids": [grant]}
     minted = call("POST", args.api_base, "/v1/api-keys", token=account, body=body)
     token, key_id = minted.get("token"), minted.get("id")
@@ -216,29 +313,24 @@ def mint(args: argparse.Namespace) -> None:
         die("the minted token carries quote or newline characters")
     credential = (
         "# The API root, without /v1 -- the agent appends its own.\n"
-        f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.api_base}\nPLOW_AGENT_TOKEN={token}\n"
+        f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
     )
-    written = write_private(args.out, credential)
+    written = write_private(destination, credential)
     env = write_env_image(args.env_out, image)
     log(f"Minted key {key_id} for {grant}, scoped to {' '.join(AGENT_SCOPES)}.")
     log(f"Wrote {written} (mode 600).")
-    log(f"Wrote {env}: {provider} runs {image}.")
+    log(f"Wrote {env}: {image} -- {provider}.")
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
 def revoke(args: argparse.Namespace) -> None:
     path = os.path.abspath(args.out)
-    try:
-        with open(path) as handle:
-            content = handle.read()
-    except OSError:
+    key_id = read_key_id(path)
+    if key_id is None:
         die(f"no credential file at {path}")
-    ids = [line[len(KEY_ID_MARKER):].strip() for line in content.splitlines() if line.startswith(KEY_ID_MARKER)]
-    if len(ids) != 1 or not ids[0].isdigit():
-        die(f"{path} does not name exactly one key id -- revoke it in the Plow dashboard")
-    call("DELETE", args.api_base, f"/v1/api-keys/{ids[0]}", token=account_token(args))
+    revoke_key(args, key_id, account_token(args))
     os.unlink(path)
-    log(f"Revoked key {ids[0]} and removed {path}.")
+    log(f"Revoked key {key_id} and removed {path}.")
     log("The agent it belonged to can no longer reach Plow. `docker compose down -v` removes its home.")
 
 
@@ -258,7 +350,8 @@ def main() -> int:
     it.add_argument("line", help="line uid, as printed by `lines`")
     it.add_argument("--name", default="plow-agent", help="name recorded on the agent credential")
     it.add_argument("--out", default=DEFAULT_OUT, help=f"where to write it, relative to the current directory (default ./{DEFAULT_OUT})")
-    it.add_argument("--provider", default=DEFAULT_PROVIDER, help=f"which agent to run (default {DEFAULT_PROVIDER})")
+    it.add_argument("--provider", default=None, help=f"which agent to run (default {DEFAULT_PROVIDER}, unless PLOW_AGENT_IMAGE already names an image)")
+    it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.add_argument("--env-out", default=DEFAULT_ENV_OUT, help=f"where its image reference goes, for compose to read (default ./{DEFAULT_ENV_OUT})")
     it.set_defaults(run=mint)
 
@@ -268,9 +361,14 @@ def main() -> int:
 
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
-    args.api_base = args.api_base.rstrip("/")
-    if args.api_base.endswith("/v1"):
-        args.api_base = args.api_base[: -len("/v1")]
+    args.api_base = strip_v1(args.api_base)
+    # `--api-base` is where *this tool* calls; the credential says where the
+    # *container* calls. The same address usually, but not against a local
+    # stack: a 127.0.0.1 that works out here is the container's own loopback.
+    if getattr(args, "agent_api_base", None) is None:
+        args.agent_api_base = args.api_base
+    else:
+        args.agent_api_base = strip_v1(args.agent_api_base)
     args.run(args)
     return 0
 
