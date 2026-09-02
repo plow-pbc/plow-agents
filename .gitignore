@@ -1,0 +1,6 @@
+# A live bearer token.
+/plow-credentials
+# Provider settings and any API key they need.
+/.env
+__pycache__/
+*.py[co]

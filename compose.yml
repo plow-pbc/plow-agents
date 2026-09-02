@@ -1,0 +1,60 @@
+# Running a Plow agent on your own machine.
+#
+# Any image meeting the Plow agent contract works here: it reads its credential
+# from /var/lib/plow/credentials, keeps everything it owns under
+# /var/lib/hermes, and boots its own `Cmd`. Nothing in this file names a
+# particular agent -- the image reference does that.
+#
+# It is the same file and the same boot a hosted agent gets, which is the point
+# of doing it this way: there is no local mode to diverge.
+#
+# Against a Plow stack on this machine, add compose.e2e.yml:
+#
+#   docker compose -f compose.yml -f compose.e2e.yml up -d
+name: plow-agent
+
+services:
+  agent:
+    # The default names no real tag on purpose: an unset variable fails on the
+    # pull by name rather than booting some other image, and an override file
+    # can still replace it without tripping a required-variable check.
+    image: ${PLOW_AGENT_IMAGE:-public.ecr.aws/e1h7x4a2/plow-cloud-agents:set-me}
+    volumes:
+      # The credential, and the whole of what the image is told: two lines,
+      # written by `bin/plow-activate`. See plow-credentials.example.
+      #
+      # Mounted at `.host` rather than at the path the agent reads. A bind
+      # mount carries this machine's ownership and mode into the container, and
+      # the image refuses a credential file that is not root's alone -- it
+      # decides which API the agent's bearer token is sent to. So the image
+      # copies this one into place as root instead. Read-only: rotation is a
+      # rewrite out here and a restart, never a write from inside.
+      - ./plow-credentials:/var/lib/plow/credentials.host:ro
+      # The agent's home: its sessions, memories, credentials and the config it
+      # rewrites. Deleting this volume deletes the agent, not just its
+      # container.
+      - agent-home:/var/lib/hermes
+    environment:
+      # Where inference goes. The only settings that are not the agent's
+      # identity, which is why they are here and not in the credential file --
+      # they are a decision about this container. Set them in `.env` beside
+      # this file; `HERMES_MODEL` is not optional when changing provider,
+      # because a model id belongs to the provider it was written for.
+      HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
+      HERMES_MODEL: ${HERMES_MODEL:-}
+    # Anything else the chosen provider reads -- an API key, say. Optional, and
+    # never the credential above.
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+    # The agent checkpoints its session and releases its compression lease on
+    # SIGTERM, and its supervisor allows that 30s. Docker's own deadline has to
+    # sit outside that one, or the checkpoint is cut off and the next boot
+    # cannot append to that transcript until the orphaned lease expires.
+    stop_grace_period: 35s
+    # No ports. The agent's only path to Plow is the socket it opens outbound;
+    # its local API server is loopback-only and holds credentials.
+
+volumes:
+  agent-home:
