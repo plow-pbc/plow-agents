@@ -6,11 +6,9 @@
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials, ./.env
     plow-agents revoke           revoke the credential ./plow-credentials names
 
-Two credentials, and the difference between them is the whole design. `login`
-stores an ACCOUNT token in ~/.config/plow/token: it can list and mint and
-revoke, it is yours, and it never leaves this machine. `mint` uses it to create
-an AGENT credential scoped to one line -- its chats and Plow's inference,
-nothing else -- and that is the only one that goes into a container.
+`login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
+revokes, and never leaves this machine. `mint` uses it for an AGENT credential
+scoped to one line -- the only one a container ever sees.
 """
 
 from __future__ import annotations
@@ -30,12 +28,10 @@ DEFAULT_API_BASE = "https://api.plow.co"
 DEFAULT_OUT = "plow-credentials"
 DEFAULT_ENV_OUT = ".env"
 DEFAULT_PROVIDER = "hermes"
-# What a Plow agent needs and nothing more: talk in its chats, and reach the
-# LLM gateway its config names.
+# All an agent needs: talk in its chats, and reach Plow's inference.
 AGENT_SCOPES = ["chats:use", "llm:chat"]
-# `revoke` has to name a key id, and the image's drop-in allowlist is exactly
-# PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third NAME=value line is a refused
-# boot. So the id rides in a comment, which the image's parser skips.
+# The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
+# NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
 KEY_ID_MARKER = "# plow-agents-key-id: "
 POLL_S = 3
 TIMEOUT_S = 900
@@ -72,7 +68,7 @@ def request(method: str, url: str, *, body: dict | None = None, token: str | Non
 
 
 def call(method: str, base: str, path: str, **kwargs) -> object:
-    """...and the same call, with a non-2xx as a fatal error rather than a value."""
+    """The same call, with a non-2xx as a fatal error rather than a value."""
     status, payload = request(method, base + path, **kwargs)
     if status // 100 != 2:
         detail = payload.get("detail") if isinstance(payload, dict) else None
@@ -81,15 +77,11 @@ def call(method: str, base: str, path: str, **kwargs) -> object:
 
 
 def write_private(path: str, body: str) -> str:
-    """Create a 0600 file and move it into place. Returns the absolute path.
+    """Write a mode-600 file atomically. Returns the absolute path.
 
-    `mkstemp` in the destination's own directory, so the name is unpredictable
-    and the create is O_CREAT|O_EXCL|O_NOFOLLOW: a file or symlink already
-    sitting at a guessable name is neither opened nor followed nor written
-    through. The mode is asserted on the descriptor rather than trusted -- it
-    is the only thing between a bearer token and every account on the machine
-    -- and the rename is last, so a failed run leaves the previous file intact
-    and no reader ever sees a half-written one.
+    The temporary name is unpredictable and created O_EXCL|O_NOFOLLOW, the mode
+    is checked rather than assumed, and the rename is last -- so a failed run
+    leaves the previous credential intact.
     """
     destination = os.path.abspath(path)
     directory = os.path.dirname(destination) or "."
@@ -131,14 +123,8 @@ def account_token(args: argparse.Namespace) -> str:
 
 
 def provider_image(args: argparse.Namespace, token: str) -> tuple[str, str]:
-    """The id and image of the provider `--provider` names.
-
-    Plow publishes each provider as `<backend>:<variant>` -- `exe:hermes` --
-    because the same agent could be booted by more than one backend. A person
-    picking one says `hermes`, so both spellings are accepted, and the image is
-    whatever this Plow would boot for it today rather than a tag written down
-    here that drifts from it.
-    """
+    """The id and image of the provider `--provider` names. Plow ids one as
+    `<backend>:<variant>` (`exe:hermes`); either spelling is accepted."""
     catalog = call("GET", args.api_base, "/v1/agents/cloud/providers", token=token)
     if not isinstance(catalog, list) or not catalog:
         die("/v1/agents/cloud/providers answered no providers")
@@ -156,12 +142,8 @@ def provider_image(args: argparse.Namespace, token: str) -> tuple[str, str]:
 
 
 def write_env_image(path: str, image: str) -> str:
-    """Point `.env` at that image, keeping whatever else the file already sets.
-
-    Compose reads this file beside `compose.yml`, and a person's own provider
-    and model lines live in it too -- so this replaces one name rather than the
-    file.
-    """
+    """Set PLOW_AGENT_IMAGE in `.env`, keeping the other lines: compose reads
+    this file, and your own provider and model settings live in it too."""
     try:
         with open(path) as handle:
             kept = [line for line in handle.read().splitlines() if not line.startswith("PLOW_AGENT_IMAGE=")]
@@ -174,11 +156,8 @@ def write_env_image(path: str, image: str) -> str:
 
 
 def login(args: argparse.Namespace) -> None:
-    # `provision_chat` asks for a pool line and a one-on-one chat on it in the
-    # same handshake. That is what makes the text a consent record, and it is
-    # also how an account gets its FIRST line -- `lines` below reads lines off
-    # existing credentials, so an account that has never been given one has
-    # nothing to list and nothing to mint against.
+    # `provision_chat` asks for a line and a chat on it in the same handshake,
+    # which is how an account with no chats yet gets its first line.
     payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": args.name, "provision_chat": True})
     code, secret, send_to = (payload.get(k, "") for k in ("display_code", "activation_secret", "send_to"))
     if not (code and secret and send_to):
@@ -206,10 +185,8 @@ def login(args: argparse.Namespace) -> None:
 
 
 def lines(args: argparse.Namespace) -> None:
-    # The account's chats, read for the line each one answers on: a line is not
-    # listed in its own right, it is the identity the agent side of a chat
-    # holds. So the first chat this account was given -- the one `login`
-    # provisioned -- is enough to name a line to mint against.
+    # A line is not listed in its own right: it is the identity the agent side
+    # of a chat answers on, so the chats are where to read one off.
     chats = call("GET", args.api_base, "/v1/chats", token=account_token(args))
     seen: dict[str, str] = {}
     for chat in chats.get("data", []) if isinstance(chats, dict) else []:
@@ -227,29 +204,21 @@ def lines(args: argparse.Namespace) -> None:
 
 def mint(args: argparse.Namespace) -> None:
     grant = args.line if args.line.startswith("line:") else f"line:{args.line}"
-    token_for_account = account_token(args)
-    provider, image = provider_image(args, token_for_account)
-    minted = call(
-        "POST",
-        args.api_base,
-        "/v1/api-keys",
-        token=token_for_account,
-        body={"name": args.name, "scopes": AGENT_SCOPES, "chat_uids": [grant]},
-    )
+    account = account_token(args)
+    provider, image = provider_image(args, account)
+    body = {"name": args.name, "scopes": AGENT_SCOPES, "chat_uids": [grant]}
+    minted = call("POST", args.api_base, "/v1/api-keys", token=account, body=body)
     token, key_id = minted.get("token"), minted.get("id")
     if not token or key_id is None:
         die("the mint returned no token or no id")
-    # A real bearer token has none of these; one that did would break out of
-    # its own line in the file this writes.
+    # A token carrying these would break out of its own line in the file below.
     if any(character in token for character in "\r\n\"\\"):
         die("the minted token carries quote or newline characters")
-    body = (
+    credential = (
         "# The API root, without /v1 -- the agent appends its own.\n"
-        f"{KEY_ID_MARKER}{key_id}\n"
-        f"PLOW_API_BASE={args.api_base}\n"
-        f"PLOW_AGENT_TOKEN={token}\n"
+        f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.api_base}\nPLOW_AGENT_TOKEN={token}\n"
     )
-    written = write_private(args.out, body)
+    written = write_private(args.out, credential)
     env = write_env_image(args.env_out, image)
     log(f"Minted key {key_id} for {grant}, scoped to {' '.join(AGENT_SCOPES)}.")
     log(f"Wrote {written} (mode 600).")
@@ -289,7 +258,7 @@ def main() -> int:
     it.add_argument("line", help="line uid, as printed by `lines`")
     it.add_argument("--name", default="plow-agent", help="name recorded on the agent credential")
     it.add_argument("--out", default=DEFAULT_OUT, help=f"where to write it, relative to the current directory (default ./{DEFAULT_OUT})")
-    it.add_argument("--provider", default=DEFAULT_PROVIDER, help=f"which agent to run, as `plow-agents` prints them (default {DEFAULT_PROVIDER})")
+    it.add_argument("--provider", default=DEFAULT_PROVIDER, help=f"which agent to run (default {DEFAULT_PROVIDER})")
     it.add_argument("--env-out", default=DEFAULT_ENV_OUT, help=f"where its image reference goes, for compose to read (default ./{DEFAULT_ENV_OUT})")
     it.set_defaults(run=mint)
 
@@ -298,8 +267,7 @@ def main() -> int:
     it.set_defaults(run=revoke)
 
     args = parser.parse_args()
-    # `${PLOW_API_BASE}/v1` is what the agent's config builds, so a /v1 here
-    # would yield /v1/v1 and 404 every call.
+    # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
     args.api_base = args.api_base.rstrip("/")
     if args.api_base.endswith("/v1"):
         args.api_base = args.api_base[: -len("/v1")]
