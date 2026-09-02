@@ -2,6 +2,7 @@
 """Manage the Plow agents on your account. Standard library only.
 
     plow-agents login            one-time: text a code, get an account token
+    plow-agents login --new-line same, and be given an assistant line
     plow-agents lines            the assistant lines this account holds
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials, ./.env
     plow-agents revoke           revoke the credential ./plow-credentials names
@@ -228,34 +229,13 @@ def account_lines(chats: object) -> dict[str, str]:
     return seen
 
 
-def needs_line(args: argparse.Namespace) -> bool:
-    """Whether this account still has to be given an assistant line.
-
-    True whenever we cannot see otherwise -- no token on this machine, or one
-    Plow will not answer for. A login that cannot look is a first login, and a
-    first login is exactly the one provisioning is for."""
-    try:
-        with open(token_path(args.token_file)) as handle:
-            token = handle.read().strip()
-    except OSError:
-        return True
-    if not token:
-        return True
-    status, payload = request("GET", args.api_base + "/v1/chats", token=token)
-    if status // 100 != 2:
-        return True
-    return not account_lines(payload)
-
-
 def login(args: argparse.Namespace) -> None:
-    # `provision_chat` asks for a line and a chat on it in the same handshake,
-    # which is how an account with no chats yet gets its first line. Asking on
-    # every login would hand a second line to an account that already has one,
-    # so it is asked for only when we can see there is none.
-    provision = needs_line(args)
-    if not provision:
-        log("This account already holds a line, so this login only refreshes the token.")
-    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": args.name, "provision_chat": provision})
+    # `provision_chat` asks for a line and a chat on it in the same handshake:
+    # a real change to the account, and one nothing here can undo. So it is
+    # asked for only when you say so. Nothing on this machine can decide it
+    # either -- a cached token is evidence about whoever logged in last, which
+    # need not be the account about to text the code below.
+    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": args.name, "provision_chat": args.new_line})
     code, secret, send_to = (payload.get(k, "") for k in ("display_code", "activation_secret", "send_to"))
     if not (code and secret and send_to):
         die("activation returned no code, secret or number")
@@ -276,6 +256,12 @@ def login(args: argparse.Namespace) -> None:
                 die("activation verified but returned no token")
             written = write_private(token_path(args.token_file), token + "\n")
             log(f"Wrote {written} (mode 600). This is your ACCOUNT token -- it stays here.")
+            # Now that a token is in hand, this account can be asked about
+            # itself -- and `mint` has nothing to scope a credential to
+            # without a line, so say so here rather than two verbs later.
+            status, body = request("GET", args.api_base + "/v1/chats", token=token)
+            if status // 100 == 2 and not account_lines(body):
+                log("This account holds no assistant line yet: run `plow-agents login --new-line` to be given one.")
             return
         time.sleep(POLL_S)
     die(f"timed out after {TIMEOUT_S}s waiting for the text")
@@ -342,6 +328,7 @@ def main() -> int:
 
     it = verbs.add_parser("login", help="text a code, store this account's token")
     it.add_argument("--name", default="plow-agents", help="name recorded on the account credential")
+    it.add_argument("--new-line", action="store_true", help="also have Plow give this account a new assistant line and a chat on it")
     it.set_defaults(run=login)
 
     verbs.add_parser("lines", help="the assistant lines this account holds").set_defaults(run=lines)

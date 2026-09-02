@@ -16,16 +16,25 @@ credential to `./plow-credentials`, scoped to one line — that line's chats and
 Plow's inference, nothing else. That second one is the only credential a
 container ever sees.
 
-`login` asks Plow for an assistant line only when this account has none. Once a
-token is here it reads `/v1/chats` first, and a login on an account that already
-holds a line just refreshes the token rather than being handed a second one.
+`login` never asks Plow for an assistant line: being given one changes the
+account, and nothing on this machine can tell whether the account about to text
+the code already has one. `login --new-line` is how you ask, and it is what an
+account with no line yet needs — `login` says so, having looked once it holds a
+token. Every later `login` just refreshes that token.
 
 ```sh
-bin/plow-agents login          # prints a code; text it
+bin/plow-agents login --new-line   # a brand-new account: get a line too
+bin/plow-agents login              # thereafter; prints a code, text it
 bin/plow-agents lines          # ln_xxx   +1 555 0100
 bin/plow-agents mint ln_xxx    # writes ./plow-credentials and ./.env
 docker compose up -d
 ```
+
+`mint` needs a Plow whose provider catalog publishes images, not just provider
+names: an older one that answers `/v1/agents/cloud/providers` with a bare list of
+names cannot say what to run, and `mint` stops with that error. Setting
+`PLOW_AGENT_IMAGE` yourself bypasses the catalog entirely and `mint` works
+against such a Plow — see below.
 
 `mint` also asks Plow which image runs the agent you named — `--provider hermes`
 by default — and writes it to `.env` as `PLOW_AGENT_IMAGE`, where `compose.yml`
@@ -36,8 +45,9 @@ Apple Silicon Mac emulates.
 To run an image Plow does not publish — one you built locally, say — set
 `PLOW_AGENT_IMAGE` in `.env` (or in the environment) yourself: `mint` finds it
 already chosen, keeps it, and does not read the provider catalog at all. Since
-`mint` writes that line itself, a `--provider` you actually type outranks it and
-goes back to the catalog.
+`mint` writes that line itself, the pin persists across mints: omit `--provider`
+to keep running the pinned image, and pass it to go back to the catalog and
+refresh.
 
 Minting again over an existing `./plow-credentials` revokes the key that file
 names before it writes the new one, so rotation never leaves a live token nobody
