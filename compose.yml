@@ -7,21 +7,17 @@
 #
 # It is the same file and the same boot a hosted agent gets, which is the point
 # of doing it this way: there is no local mode to diverge.
-#
-# Against a Plow stack on this machine, add compose.e2e.yml:
-#
-#   docker compose -f compose.yml -f compose.e2e.yml up -d
 name: plow-agent
 
 services:
   agent:
-    # The default names no real tag on purpose: an unset variable fails on the
-    # pull by name rather than booting some other image, and an override file
-    # can still replace it without tripping a required-variable check.
-    image: ${PLOW_AGENT_IMAGE:-public.ecr.aws/e1h7x4a2/plow-cloud-agents:set-me}
+    # Written to `.env` by `plow-agents mint`: the image Plow itself would
+    # boot for the provider you chose. No default -- a tag written down here
+    # would drift from the one your Plow runs, and the drift would be silent.
+    image: ${PLOW_AGENT_IMAGE:?run `plow-agents mint` first -- it writes this to .env}
     volumes:
       # The credential, and the whole of what the image is told: two lines,
-      # written by `bin/plow-activate`. See plow-credentials.example.
+      # written by `plow-agents mint`. See plow-credentials.example.
       #
       # Mounted at `.host` rather than at the path the agent reads. A bind
       # mount carries this machine's ownership and mode into the container, and
@@ -30,10 +26,11 @@ services:
       # copies this one into place as root instead. Read-only: rotation is a
       # rewrite out here and a restart, never a write from inside.
       - ./plow-credentials:/var/lib/plow/credentials.host:ro
-      # The agent's home: its sessions, memories, credentials and the config it
-      # rewrites. Deleting this volume deletes the agent, not just its
-      # container.
-      - agent-home:/var/lib/hermes
+      # The agent's home: its sessions, memories, credentials and the config
+      # it rewrites. Deleting this volume deletes the agent, not just its
+      # container. The path belongs to the image, not to this file -- override
+      # PLOW_AGENT_HOME if you run one that keeps its home somewhere else.
+      - agent-home:${PLOW_AGENT_HOME:-/var/lib/hermes}
     environment:
       # Where inference goes. The only settings that are not the agent's
       # identity, which is why they are here and not in the credential file --
@@ -42,8 +39,8 @@ services:
       # because a model id belongs to the provider it was written for.
       HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
       HERMES_MODEL: ${HERMES_MODEL:-}
-    # Anything else the chosen provider reads -- an API key, say. Optional, and
-    # never the credential above.
+    # PLOW_AGENT_IMAGE above, and anything the chosen inference provider reads
+    # -- an API key, say. Never the credential above.
     env_file:
       - path: .env
         required: false
