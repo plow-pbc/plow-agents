@@ -12,6 +12,13 @@ own source repository, so there is nothing to pull and no registry to log into.
 It is optional: nothing needs it unless the image you build carries something
 that publishes under a name, and today that is the usage reporter.
 
+It rides in through `.env` like the other settings, and deliberately has no
+shell override: one place to set it is one place to look when it is wrong.
+
+The credential and this answer different questions. The credential says **who**
+you are and is a secret; `AGENT_ID` says **which** of your agents this container
+is, and is not — a name on a page.
+
 It cannot be worked out from inside. The credential names the line this agent
 answers on, not the agent, and Plow answers "cloud agent not found" for one
 running on your own machine — so a service that needs it and does not have it

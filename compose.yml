@@ -21,8 +21,11 @@ services:
       # architecture, which is why it is a build and not a pull.
       context: ${PLOW_AGENT_REPO:-https://github.com/plow-pbc/plow-hermes-agent.git#main}
     volumes:
-      # The credential, and the whole of what the image is told: two lines,
-      # written by `plow-agents mint`. See plow-credentials.example.
+      # The credential: WHO this agent is, written by `plow-agents mint`. See
+      # plow-credentials.example. Not quite the whole of what the image is told
+      # -- `AGENT_ID` in `.env` says WHICH agent it is, for anything inside that
+      # publishes under a name. The two answer different questions, and only
+      # this one is a secret.
       #
       # Mounted at `.host` rather than at the path the agent reads. A bind
       # mount carries this machine's ownership and mode into the container, and
@@ -44,16 +47,6 @@ services:
       # because a model id belongs to the provider it was written for.
       HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
       HERMES_MODEL: ${HERMES_MODEL:-}
-      # Which agent this container IS, for anything inside it that publishes
-      # under a name -- today that is the usage reporter some images carry.
-      #
-      # It has to come from out here. The credential says which LINE this agent
-      # answers on, and Plow's own answer about a cloud agent is "not found" for
-      # one running on your machine, so nothing inside the container can work
-      # out which agent it is. Unset is fine and is the common case: a service
-      # that needs it says so and stands down rather than guessing a name, and
-      # a guess would file this container's work under somebody else's agent.
-      AGENT_ID: ${AGENT_ID:-}
     # PLOW_AGENT_REPO above, and anything the chosen inference provider reads
     # -- an API key, say. Never the credential above.
     env_file:
