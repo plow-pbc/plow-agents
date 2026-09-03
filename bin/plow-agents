@@ -258,6 +258,17 @@ def mint(args: argparse.Namespace) -> None:
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
+def recovery(compose_file: str) -> str:
+    """The teardown, spelled so an operator can paste it and hit the same project.
+
+    A bare `docker compose down -v` is what this function goes out of its way
+    not to run: it takes COMPOSE_FILE and COMPOSE_PROJECT_NAME from the shell
+    and from `.env`, so printing it as the way out of a failure hands back the
+    deletion this tool refuses to perform.
+    """
+    return f"env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME docker compose --env-file {os.devnull} -f ./{compose_file} --project-directory . down -v"
+
+
 def compose_down(directory: str) -> str | None:
     """`docker compose down -v` here: the container and the agent's home volume.
 
@@ -269,31 +280,23 @@ def compose_down(directory: str) -> str | None:
     compose_file = next((name for name in COMPOSE_FILES if os.path.exists(os.path.join(directory, name))), None)
     if compose_file is None:
         return (
-            f"No compose file in {directory}, so nothing was torn down here. Run "
-            "`docker compose down -v` from the directory holding the agent's compose.yml "
-            "to remove its container and home volume."
+            f"No compose file in {directory}, so nothing was torn down here. From the directory "
+            f"holding the agent's compose.yml, run:\n    {recovery('compose.yml')}"
         )
     if shutil.which("docker") is None:
-        return (
-            f"No `docker` on PATH: the project in {directory} is untouched. Run "
-            "`docker compose down -v` there to remove the container and the agent's home volume."
-        )
-    # A COMPOSE_FILE or COMPOSE_PROJECT_NAME inherited from the environment would
-    # aim `down -v` at whatever project *those* name -- someone else's containers,
-    # someone else's volumes. The project torn down here is the one this directory
-    # holds and no other, so the file and the directory are named on the command
-    # line and those two variables are dropped from what the subprocess sees.
+        return f"No `docker` on PATH: the project in {directory} is untouched. There, run:\n    {recovery(compose_file)}"
+    # Three ways to be aimed at the wrong project, and a `down -v` aimed at the
+    # wrong project deletes someone else's containers and volumes: COMPOSE_FILE
+    # and COMPOSE_PROJECT_NAME inherited from the shell, and the same two read
+    # out of this directory's own `.env`, which Compose sources by default and
+    # which this compose.yml invites you to keep. So the file and the directory
+    # are named on the command line, those two are dropped from the subprocess
+    # environment, and `.env` is replaced by an empty one.
     env = {key: value for key, value in os.environ.items() if key not in COMPOSE_ENV_OVERRIDES}
-    compose = ("docker", "compose", "-f", f"./{compose_file}", "--project-directory", ".")
-    if subprocess.run(("docker", "compose", "version"), cwd=directory, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
-        return (
-            f"No `docker compose` on this machine: the project in {directory} is untouched. "
-            "Install the Compose plugin and run `docker compose down -v` there to remove the "
-            "container and the agent's home volume."
-        )
+    compose = ("docker", "compose", "--env-file", os.devnull, "-f", f"./{compose_file}", "--project-directory", ".")
     log(f"Running `docker compose down -v` in {directory} ...")
     if subprocess.run(compose + ("down", "-v"), cwd=directory, env=env).returncode != 0:
-        return f"`docker compose down -v` failed in {directory}. Run that command again there."
+        return f"Teardown failed in {directory}. There, run:\n    {recovery(compose_file)}"
     log("Container and home volume removed.")
     return None
 
