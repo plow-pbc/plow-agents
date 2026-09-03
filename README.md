@@ -163,6 +163,34 @@ turn time moves with the provider's day.
   home volume belongs to the project, so two runs under one name are two agents
   sharing one home.
 
+### Against a local API
+
+`--api-base` is the API this CLI dials; `--agent-api-base` is what the container
+dials, which is a different address when the API is a local compose stack. The
+agent also has to be on that stack's network to resolve it, and the turns have to
+arrive as inbound messages through that stack's LinQ twin:
+
+```sh
+bench-cache run --label before --line ln_p3 \
+  --image plow-hermes-agent:bench-before --allow-local-image \
+  --api-base http://127.0.0.1:19014 --agent-api-base http://api:8000 \
+  --network plow-promptcache_default \
+  --twin-base http://127.0.0.1:19015 --from-phone +15551234567 --to-phone +15550000004 \
+  --usage-cmd "docker exec -i plow-promptcache-db-1 psql -U plow -d plow -A -F, -c {sql}"
+```
+
+`--to-phone` is the line's own number and is not optional: it picks which line
+the inbound lands on, and a message on another line is one this agent never
+sees. Omit it and the run is a silent no-op — every turn times out, no
+completion is made, and the usage table stays empty while the agent looks
+perfectly healthy.
+
+Seeding an account on a local stack needs no phone: `POST /v1/auth/activate`
+with `provision_chat: true`, post the returned code to the twin's `/ui/inbound`
+as `Plow Activate: <code>`, then poll `POST /v1/auth/activate/redeem` for the
+token. Write that token to a file and pass `--token-file` — the lines themselves
+are seeded by the API's own migration from `CHAT_LINE_PHONES`.
+
 ### What it does not measure
 
 - **Cache counters, until the API records them.** `cache_read_tokens` and

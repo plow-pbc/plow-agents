@@ -15,10 +15,15 @@ and prints what it measured -- including the parts it could not measure, which
 is the whole point of the header it writes at the top of every report.
 
 Auth is `plow-agents`'s: this shells out to it for `mint` and `revoke`, and
-reads the same account token for the chat calls. Usage rows have no owner-facing
-API (`/v1/usage` aggregates, and does not split prompt from completion or carry
-the cache counters), so they come from the documented read-only prod path,
-`plow-ops db query`.
+reads the same account token. Usage rows have no owner-facing API -- `/v1/usage`
+aggregates, and never splits prompt from completion or carries the cache
+counters -- so they come from a SQL command you supply with `--usage-cmd`:
+`plow-ops db query {sql}` against prod, a `docker exec ... psql` against a local
+compose stack. Same code path either way.
+
+Turns are delivered as INBOUND messages through the LinQ twin, because that is
+what an agent answers; see `drive_twin`. That is the one part of this harness a
+production run cannot reuse as-is.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -65,9 +71,11 @@ def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, text=True, capture_output=True, **kwargs)
 
 
-def api(method: str, url: str, token: str, body: dict | None = None) -> tuple[int, Any]:
+def api_json(method: str, url: str, token: str | None = None, body: dict | None = None) -> tuple[int, Any]:
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+    headers = {"Accept": "application/json"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -87,7 +95,7 @@ def api(method: str, url: str, token: str, body: dict | None = None) -> tuple[in
 # -- the parts that touch the world ------------------------------------------
 
 
-def write_compose(directory: Path, image: str, project: str, platform: str | None) -> Path:
+def write_compose(directory: Path, image: str, project: str, platform: str | None, network: str | None, env: list[str]) -> Path:
     """The `Test a new image` compose, with the image pinned by digest.
 
     Digest, never a tag: this container is handed a credential carrying
@@ -95,6 +103,14 @@ def write_compose(directory: Path, image: str, project: str, platform: str | Non
     pushed to point. `run` refuses anything else.
     """
     platform_line = f"    platform: {platform}\n" if platform else ""
+    # A local API runs in its own compose project; the agent has to be on that
+    # network to resolve it. Prod needs none of this -- the agent dials out.
+    network_lines = f"    networks:\n      - target\n" if network else ""
+    network_block = f"networks:\n  target:\n    name: {network}\n    external: true\n" if network else ""
+    # Whatever the operator adds must be added to EVERY variant of a comparison
+    # or the runs differ in more than the image, which is the one thing this
+    # tool exists to prevent. It is printed in the report header for that reason.
+    env_lines = ("    environment:\n" + "".join(f"      {k}: \"{v}\"\n" for k, v in (e.split("=", 1) for e in env))) if env else ""
     (directory / "compose.yml").write_text(
         f"name: {project}\n"
         "services:\n"
@@ -105,14 +121,23 @@ def write_compose(directory: Path, image: str, project: str, platform: str | Non
         "      - ./plow-credentials:/var/lib/plow/credentials.host:ro\n"
         "      - agent-home:/var/lib/hermes\n"
         "    stop_grace_period: 35s\n"
+        f"{env_lines}"
+        f"{network_lines}"
         "volumes:\n"
         "  agent-home:\n"
+        f"{network_block}"
     )
     return directory / "compose.yml"
 
 
-def boot(directory: Path, line: str, api_base: str, plow_agents: str) -> None:
-    minted = run([plow_agents, "--api-base", api_base, "mint", line], cwd=directory)
+def boot(directory: Path, line: str, api_base: str, plow_agents: str, token_file: Path, agent_api_base: str | None) -> None:
+    mint = [plow_agents, "--api-base", api_base, "--token-file", str(token_file), "mint", line]
+    if agent_api_base:
+        # What the CONTAINER dials, which is not what this CLI dials when the
+        # API is a local one: the host sees 127.0.0.1:<port>, the container sees
+        # a service name on the API's own network.
+        mint += ["--agent-api-base", agent_api_base]
+    minted = run(mint, cwd=directory)
     if minted.returncode != 0:
         die(f"mint failed for {line}: {minted.stderr.strip() or minted.stdout.strip()}")
     up = run(["docker", "compose", "up", "-d"], cwd=directory)
@@ -132,14 +157,14 @@ def boot(directory: Path, line: str, api_base: str, plow_agents: str) -> None:
     die(f"no {BOOT_MARKER!r} within {BOOT_TIMEOUT_S}s -- the agent never took its line")
 
 
-def teardown(directory: Path, api_base: str, plow_agents: str, keep: bool) -> None:
+def teardown(directory: Path, api_base: str, plow_agents: str, token_file: Path, keep: bool) -> None:
     """Revoke first, then remove the container and its home.
 
     Revoke first on purpose: `compose down -v` deletes the home the credential
     was mounted into, and a credential outliving the agent that held it is the
     one piece of this that is not merely untidy.
     """
-    revoked = run([plow_agents, "--api-base", api_base, "revoke"], cwd=directory)
+    revoked = run([plow_agents, "--api-base", api_base, "--token-file", str(token_file), "revoke"], cwd=directory)
     log(f"revoke: {(revoked.stdout + revoked.stderr).strip().splitlines()[-1] if (revoked.stdout + revoked.stderr).strip() else 'no output'}")
     if keep:
         log(f"--keep: leaving the container and {directory} in place")
@@ -148,7 +173,7 @@ def teardown(directory: Path, api_base: str, plow_agents: str, keep: bool) -> No
 
 
 def home_chat(token: str, api_base: str, line: str) -> str:
-    status, body = api("GET", f"{api_base}/v1/chats", token)
+    status, body = api_json("GET", f"{api_base}/v1/chats", token)
     if status != 200 or not isinstance(body, dict):
         die(f"GET /v1/chats -> {status}: {body}")
     for chat in body.get("data", []):
@@ -158,43 +183,61 @@ def home_chat(token: str, api_base: str, line: str) -> str:
     die(f"no active chat on {line} -- has the agent greeted it yet?")
 
 
-def drive(token: str, api_base: str, chat: str, turns: list[str], reply_timeout_s: int) -> list[dict]:
-    """Send each turn, wait for the agent's reply, record the two clocks.
+def _twin_outbound(twin_base: str, phone: str) -> list[dict]:
+    """Every outbound message the twin holds for *phone*, across its line chats."""
+    status, chats = api_json("GET", f"{twin_base}/ui/chats")
+    if status != 200 or not isinstance(chats, dict):
+        return []
+    messages: list[dict] = []
+    for chat in chats.get("chats", []):
+        if chat.get("remote_phone") != phone:
+            continue
+        status, detail = api_json("GET", f"{twin_base}/ui/chats/{chat['id']}")
+        if status != 200 or not isinstance(detail, dict):
+            continue
+        messages += [m for m in detail.get("messages", []) if m.get("direction") == "outbound"]
+    return messages
 
-    ttft_s is the wall time to the FIRST assistant message after ours, and
-    total_s the time until no further assistant message arrives for one poll --
-    an agent that narrates before its last tool call produces several, and the
-    turn is not over at the first one.
+
+def drive_twin(twin_base: str, phone: str, to_phone: str, turns: list[str], reply_timeout_s: int) -> list[dict]:
+    """Drive the agent the way its owner does: an inbound text, then wait.
+
+    The owner-side chat API is not a driver. `POST /v1/chats/{uid}/messages`
+    sends AS the line -- it is the side the agent itself writes on -- so a turn
+    posted there is not a message the agent answers. What the agent answers is
+    an INBOUND message from the remote phone, which on a local stack is the
+    LinQ twin's `/ui/inbound` and in production is a real handset. That is the
+    one part of this harness a prod run cannot reuse as-is.
+
+    ttft_s is the wall time to the FIRST new outbound message, and total_s to
+    the last one before the agent goes quiet: an agent that narrates before its
+    final tool call sends several, and the turn is not over at the first.
     """
     records = []
     for index, text in enumerate(turns, start=1):
+        seen = {m.get("id") for m in _twin_outbound(twin_base, phone)}
         sent_at = time.time()
-        status, posted = api("POST", f"{api_base}/v1/chats/{chat}/messages", token, {"text": text})
+        # `to_phone` is not optional here, whatever the twin's default is: it
+        # picks the LINE the message lands on, and a message on another line is
+        # one this agent never sees. Omitting it costs a silent no-op run --
+        # every turn times out, no completion is made, and the usage table stays
+        # empty while the agent looks perfectly healthy.
+        status, _ = api_json("POST", f"{twin_base}/ui/inbound",
+                             body={"to_phone": to_phone, "remote_phone": phone, "text": text})
         if status not in (200, 201):
-            die(f"turn {index}: POST message -> {status}: {posted}")
-        after = posted.get("uid") if isinstance(posted, dict) else None
+            die(f"turn {index}: twin /ui/inbound -> {status}")
         first_reply_at: float | None = None
         last_seen: float | None = None
         replies: list[str] = []
         deadline = sent_at + reply_timeout_s
         while time.time() < deadline:
             time.sleep(POLL_S)
-            status, page = api("GET", f"{api_base}/v1/chats/{chat}/messages?limit=20", token)
-            if status != 200 or not isinstance(page, dict):
-                continue
-            fresh = []
-            for message in reversed(page.get("data", [])):
-                if message.get("uid") == after:
-                    fresh = []
-                    continue
-                if message.get("role") == "assistant" or message.get("sender", {}).get("type") == "agent":
-                    fresh.append(message)
-            new = [m for m in fresh if m.get("uid") not in replies]
-            if new:
+            fresh = [m for m in _twin_outbound(twin_base, phone) if m.get("id") not in seen and m.get("id") not in replies]
+            if fresh:
                 if first_reply_at is None:
                     first_reply_at = time.time()
                 last_seen = time.time()
-                replies.extend(m.get("uid") for m in new)
+                replies += [m.get("id") for m in fresh]
             if first_reply_at is not None and last_seen is not None and time.time() - last_seen > 3 * POLL_S:
                 break
         records.append(
@@ -212,32 +255,44 @@ def drive(token: str, api_base: str, chat: str, turns: list[str], reply_timeout_
     return records
 
 
-def usage_rows(started: str, ended: str, session_id: int | None) -> tuple[list[dict], list[str], str | None]:
-    """The usage rows this run produced, from the read-only prod path.
+def usage_rows(usage_cmd: str, started: str, ended: str, session_id: int | None) -> tuple[list[dict], list[str], str | None]:
+    """The usage rows this run produced, read through `--usage-cmd`.
+
+    One command template with a `{sql}` slot, so prod and a local stack differ
+    by a flag rather than a code path: `plow-ops db query {sql}` against prod,
+    `docker exec ... psql ... -c {sql}` against a compose database. It must emit
+    CSV with one header row.
 
     Returns (rows, columns, note). `note` is set when the API build behind the
-    run predates plow #1710 and therefore recorded no cache counters -- the
-    caller reports that instead of printing zeros, which would read as "cached
-    nothing" rather than "did not measure".
+    run recorded no cache counters -- the caller reports that instead of
+    printing zeros, which would read as "cached nothing" rather than "did not
+    measure".
     """
-    if shutil.which("plow-ops") is None:
-        return [], [], "plow-ops not on PATH -- usage rows not read; see README for the manual query"
-    described = run(["plow-ops", "db", "describe", "llm_usage"])
-    if described.returncode != 0:
-        return [], [], f"plow-ops db describe failed: {described.stderr.strip()}"
-    present = {line.split(",")[0] for line in described.stdout.splitlines()[1:] if line.strip()}
+    def sql(statement: str) -> tuple[int, str, str]:
+        argv = shlex.split(usage_cmd.replace("{sql}", "\x00"))
+        argv = [statement if part == "\x00" else part for part in argv]
+        done = run(argv)
+        return done.returncode, done.stdout, done.stderr
+
+    code, out, err = sql(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'llm_usage'"
+    )
+    if code != 0:
+        return [], [], f"column probe failed ({usage_cmd.split()[0]}): {err.strip() or out.strip()}"
+    present = {line.split(",")[0].strip() for line in out.splitlines()[1:] if line.strip()}
+    if not present:
+        return [], [], "column probe returned no columns -- is llm_usage there, and does --usage-cmd emit CSV?"
     missing = [column for column in CACHE_COLUMNS if column not in present]
-    columns = list(BASE_COLUMNS) + [c for c in CACHE_COLUMNS if c in present]
+    columns = [c for c in list(BASE_COLUMNS) + list(CACHE_COLUMNS) if c in present]
     where = f"created_at >= '{started}' AND created_at <= '{ended}'"
     if session_id is not None:
         where += f" AND session_id = {session_id}"
-    query = f"SELECT {', '.join(columns)} FROM llm_usage WHERE {where} ORDER BY created_at"
-    result = run(["plow-ops", "db", "query", query])
-    if result.returncode != 0:
-        return [], columns, f"usage query failed: {result.stderr.strip()}"
-    lines = [l for l in result.stdout.splitlines() if l.strip()]
-    header = lines[0].split(",") if lines else columns
-    rows = [dict(zip(header, line.split(","))) for line in lines[1:]]
+    code, out, err = sql(f"SELECT {', '.join(columns)} FROM llm_usage WHERE {where} ORDER BY created_at")
+    if code != 0:
+        return [], columns, f"usage query failed: {err.strip() or out.strip()}"
+    lines = [l for l in out.splitlines() if l.strip()]
+    header_row = [c.strip() for c in lines[0].split(",")] if lines else columns
+    rows = [dict(zip(header_row, [v.strip() for v in line.split(",")])) for line in lines[1:]]
     note = None
     if missing:
         note = (
@@ -246,7 +301,7 @@ def usage_rows(started: str, ended: str, session_id: int | None) -> tuple[list[d
             "On the streaming path that build also prices a cache read at the full input rate, so cost_usd "
             "for a caching variant would be an over-estimate."
         )
-    return rows, header, note
+    return rows, columns, note
 
 
 # -- reporting ---------------------------------------------------------------
@@ -289,8 +344,9 @@ def header(record: dict) -> list[str]:
         "",
         "| what | value |",
         "|---|---|",
-        f"| image | `{record['image']}` |",
+        f"| image | `{record['image']}`{'' if record.get('image_pinned', True) else ' — **not digest-pinned** (locally built)'} |",
         f"| line | `{record['line']}` |",
+        f"| agent env | {', '.join(record.get('agent_env') or []) or 'none'} |",
         f"| api base | {record['api_base']} |",
         f"| api revision | {record['api_revision'] or '**unverified** (no version endpoint; pass --api-revision)'} |",
         f"| conversation | `{record['conversation']}` ({len(record['turns'])} turns) |",
@@ -334,8 +390,8 @@ def render(records: list[dict]) -> str:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    if "@sha256:" not in args.image:
-        die("--image must be pinned by digest (repo@sha256:...), not by tag")
+    if "@sha256:" not in args.image and not args.allow_local_image:
+        die("--image must be pinned by digest (repo@sha256:...); pass --allow-local-image for one you built yourself")
     token_file = Path(args.token_file) if args.token_file else TOKEN_FILE
     if not token_file.exists():
         die(f"no account token at {token_file} -- run `plow-agents login` first")
@@ -345,20 +401,20 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     directory = Path(args.workdir or f"./bench-{args.label}-{int(time.time())}").resolve()
     directory.mkdir(parents=True, exist_ok=False)
-    write_compose(directory, args.image, args.project or f"agent-bench-{args.label}", args.platform)
+    write_compose(directory, args.image, args.project or f"agent-bench-{args.label}", args.platform, args.network, args.agent_env)
     log(f"scratch: {directory}")
 
     started = now()
     try:
-        boot(directory, args.line, args.api_base, plow_agents)
+        boot(directory, args.line, args.api_base, plow_agents, token_file, args.agent_api_base)
         chat = home_chat(token, args.api_base, args.line)
         log(f"chat: {chat}")
-        turns = drive(token, args.api_base, chat, conversation["turns"], conversation.get("reply_timeout_s", 300))
+        turns = drive_twin(args.twin_base, args.from_phone, args.to_phone, conversation["turns"], conversation.get("reply_timeout_s", 300))
     finally:
         ended = now()
-        teardown(directory, args.api_base, plow_agents, args.keep)
+        teardown(directory, args.api_base, plow_agents, token_file, args.keep)
 
-    rows, columns, note = usage_rows(started, ended, args.session_id)
+    rows, columns, note = usage_rows(args.usage_cmd, started, ended, args.session_id)
     record = {
         "label": args.label,
         "image": args.image,
@@ -366,6 +422,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         "api_base": args.api_base,
         "api_revision": args.api_revision,
         "conversation": args.conversation,
+        "image_pinned": "@sha256:" in args.image,
+        "agent_env": args.agent_env,
         "started": started,
         "ended": ended,
         "turns": turns,
@@ -396,11 +454,24 @@ def main() -> None:
     r.add_argument("--conversation", default=str(Path(__file__).resolve().parent.parent / "bench" / "conversation.json"))
     r.add_argument("--project", default=None, help="compose project name; must be unique per concurrent run")
     r.add_argument("--platform", default=None, help="e.g. linux/amd64 when the image arch differs")
+    r.add_argument("--agent-api-base", default=None, help="what the CONTAINER dials, when that differs from --api-base (a local stack)")
+    r.add_argument("--agent-env", action="append", default=[], metavar="KEY=VALUE", help="env for the agent container; use the SAME set for every variant")
+    r.add_argument("--network", default=None, help="existing docker network to join, e.g. a local API's compose network")
+    r.add_argument("--twin-base", required=True, help="LinQ twin base URL -- the only way to send the agent an INBOUND message on a local stack")
+    r.add_argument("--from-phone", required=True, help="the remote phone the scripted turns come from")
+    r.add_argument("--to-phone", required=True, help="the LINE's number -- which line the inbound lands on, and so which agent sees it")
     r.add_argument("--workdir", default=None)
     r.add_argument("--session-id", type=int, default=None, help="scope the usage query to one session")
     r.add_argument("--token-file", default=None)
     r.add_argument("--plow-agents", default=None)
     r.add_argument("--out", default=None)
+    r.add_argument("--allow-local-image", action="store_true", help="accept a tag: an image you built, not one you were handed")
+    r.add_argument(
+        "--usage-cmd",
+        default="plow-ops db query {sql}",
+        help="command that runs one SQL statement and prints CSV; {sql} is the slot. "
+             "Local stack: 'docker exec -i <db-container> psql -U plow -d plow -A -F, -c {sql}'",
+    )
     r.add_argument("--keep", action="store_true", help="leave the container up after the run")
     r.set_defaults(func=cmd_run)
 
