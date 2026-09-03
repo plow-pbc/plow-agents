@@ -6,6 +6,18 @@ no ports, no inbound listener. This repository is `compose.yml` plus one stdlib
 Python script, and no agent of its own: `compose.yml` builds the agent from its
 own source repository, so there is nothing to pull and no registry to log into.
 
+## Naming the agent
+
+`AGENT_ID` in `.env` names which agent this container is — `AGENT_ID=life`, say.
+It is optional: nothing needs it unless the image you build carries something
+that publishes under a name, and today that is the usage reporter.
+
+It cannot be worked out from inside. The credential names the line this agent
+answers on, not the agent, and Plow answers "cloud agent not found" for one
+running on your own machine — so a service that needs it and does not have it
+says so and stands down, which is the right failure: a guessed name files this
+container's work under somebody else's agent.
+
 ## The two credentials
 
 `plow-agents login` stores an **account** token in `~/.config/plow/token` (mode

@@ -44,6 +44,16 @@ services:
       # because a model id belongs to the provider it was written for.
       HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
       HERMES_MODEL: ${HERMES_MODEL:-}
+      # Which agent this container IS, for anything inside it that publishes
+      # under a name -- today that is the usage reporter some images carry.
+      #
+      # It has to come from out here. The credential says which LINE this agent
+      # answers on, and Plow's own answer about a cloud agent is "not found" for
+      # one running on your machine, so nothing inside the container can work
+      # out which agent it is. Unset is fine and is the common case: a service
+      # that needs it says so and stands down rather than guessing a name, and
+      # a guess would file this container's work under somebody else's agent.
+      AGENT_ID: ${AGENT_ID:-}
     # PLOW_AGENT_REPO above, and anything the chosen inference provider reads
     # -- an API key, say. Never the credential above.
     env_file:
