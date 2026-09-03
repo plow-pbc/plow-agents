@@ -1,13 +1,17 @@
+# Example compose for an agent repository -- copy beside your Dockerfile.
 services:
   agent:
     build: .
     volumes:
-      - ./plow-credentials:/var/lib/plow/credentials:ro
+      # `.host`: the image copies it into place as root, so the file's host ownership does not matter.
+      - ./plow-credentials:/var/lib/plow/credentials.host:ro
       # The agent's home, kept across `up`/`down` so its sessions and setup
       # survive. It also shadows the image, so an edit to SOUL.md or a skill
       # is only picked up once it is gone: `docker compose down -v` starts
       # this agent fresh, and `down -v && up --build -d` is one edit round.
       - agent-home:/var/lib/hermes
+    # The agent checkpoints on SIGTERM; its supervisor allows 30s, and Docker's default 10s cuts it off and orphans the transcript lease.
+    stop_grace_period: 35s
     # No ports: the agent connects to Plow outbound.
 
 volumes:

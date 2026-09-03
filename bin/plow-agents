@@ -126,7 +126,7 @@ def credential_key_id(path: str, keys: object, *, tolerate_unmatched: bool = Fal
     if len(matches) > 1:
         if tolerate_unmatched:
             return ""
-        die(f"more than one key matches the token in {path}")
+        die(f"more than one key matches the token in {path} -- revoke in the Plow dashboard")
     return matches[0]
 
 
