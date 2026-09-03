@@ -9,8 +9,8 @@
     plow-agents profile          set or show this account's public profile
     plow-agents revoke [line]    revoke a local credential by file or line
 
-`login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
-revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
+`login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
+revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
 container. `mint` uses it for an AGENT credential scoped to one line, and that
 second one is the only credential a container ever sees.
 """

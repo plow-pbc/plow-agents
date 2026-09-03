@@ -85,8 +85,8 @@ created `./plow-credentials` as an empty directory; recover with: `docker compos
 
 ## Credentials and authority
 
-The account token stays on the host and lets this CLI list lines, mint, and
-revoke. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
+The account token stays on the host and lets this CLI list lines, mint, revoke,
+and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` to that repo's
 `.gitignore`. Re-minting over the file rotates its old key rather than
 leaving a live credential behind. `plow-credentials.example` shows the file's
