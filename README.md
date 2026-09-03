@@ -25,7 +25,7 @@ token. Every later `login` just refreshes that token.
 ```sh
 bin/plow-agents login --new-line   # a brand-new account: get a line too
 bin/plow-agents login              # thereafter; prints a code, text it
-bin/plow-agents lines          # ln_xxx   +1 555 0100
+bin/plow-agents lines          # ln_xxx   Ada   +1 555 0100
 bin/plow-agents mint ln_xxx    # writes ./plow-credentials
 docker compose up --build
 ```

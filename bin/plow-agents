@@ -156,17 +156,17 @@ def account_token(args: argparse.Namespace) -> str:
 # --- verbs -----------------------------------------------------------------
 
 
-def account_lines(chats: object) -> dict[str, str]:
-    """The assistant lines a GET /v1/chats body shows, uid -> label.
+def account_lines(chats: object) -> dict[str, tuple[str, str]]:
+    """The assistant lines a GET /v1/chats body shows, uid -> (name, number).
 
     A line is not listed in its own right: it is the identity the agent side of
     a chat answers on, so the chats are where to read one off."""
-    seen: dict[str, str] = {}
+    seen: dict[str, tuple[str, str]] = {}
     for chat in chats.get("data", []) if isinstance(chats, dict) else []:
         for participant in chat.get("participants", []):
             line = participant.get("line") if participant.get("type") == "agent" else None
             if isinstance(line, dict) and line.get("uid"):
-                seen.setdefault(line["uid"], line.get("provider_key") or "")
+                seen.setdefault(line["uid"], (line.get("display_name") or "", line.get("provider_key") or ""))
     return seen
 
 
@@ -214,8 +214,8 @@ def lines(args: argparse.Namespace) -> None:
         log("No assistant lines on this account yet.")
         log("A line arrives with your first chat; text your Plow number to be given one.")
         return
-    for uid, label in sorted(seen.items()):
-        print(f"{uid}\t{label}")
+    for uid, (name, number) in sorted(seen.items()):
+        print(f"{uid}\t{name}\t{number}")
 
 
 def mint(args: argparse.Namespace) -> None:
