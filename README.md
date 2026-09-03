@@ -12,15 +12,28 @@ own source repository, so there is nothing to pull and no registry to log into.
 600). It lists, mints and revokes, so of course it travels — over HTTPS, to Plow,
 which is what it is for. What it never does is enter a container: it stays on
 this machine and in your own hands. `mint` uses it to write an **agent**
-credential to `./plow-credentials`, scoped to one line — that line's chats,
-Plow's inference, and the relay, nothing else. That second one is the only
-credential a container ever sees.
+credential to `./plow-credentials`, scoped to one line. That second one is the
+only credential a container ever sees.
+
+What that credential carries is Plow's to decide, not this tool's: asking for a
+line asks for the assistant role, and it is the same one a cloud agent is minted
+with — that line's chats, Plow's inference, `relay:call`, and `payments:request`
+with a $200/day cap. Both of those last two reach past the container.
+`relay:call` is reach onto the owner's own machine through Latch;
+`payments:request` asks for a payment against that cap, which the owner's device
+is what consumes. So a container you run yourself holds what a cloud agent
+holds. Run one you would grant both to, on a line you are willing to give it.
 
 `login` never asks Plow for an assistant line: being given one changes the
 account, and nothing on this machine can tell whether the account about to text
 the code already has one. `login --new-line` is how you ask, and it is what an
 account with no line yet needs — `login` says so, having looked once it holds a
 token. Every later `login` just refreshes that token.
+
+`login` never asks for a phone number, and there is no flag to give it one: the
+handset the code is texted *from* is the identity, and the account it binds is
+whoever that number already is to Plow. So run it from the phone that should own
+this agent, not from whichever one is nearest.
 
 ```sh
 bin/plow-agents login --new-line   # a brand-new account: get a line too
@@ -44,10 +57,14 @@ run instead — revoke that one first.
 The credential lands relative to the directory you run `mint` from — the one
 holding `compose.yml` — and it prints its absolute path. `--out` puts the credential
 elsewhere, and then the mount in `compose.yml` has to name that path too.
-`--api-base` is the root *this tool* calls, without `/v1`; `--agent-api-base`
-is the one written into the credential for the *container* to call, and defaults
-to the same. They differ against a local stack: `http://127.0.0.1:8000` reaches
-your API from this machine but is the container's own loopback inside it. Use
+`--api-base` is a flag on `plow-agents` itself rather than on a verb, so it goes
+*before* the verb — `bin/plow-agents --api-base http://127.0.0.1:8000 mint …` —
+and it defaults to production, so most runs never pass it. It is the root *this
+tool* calls, without `/v1`. `--agent-api-base` is a `mint` flag and goes after
+the verb; it is the root written into the credential for the *container* to
+call, and defaults to the same one. They differ against a local stack:
+`http://127.0.0.1:8000` reaches your API from this machine but is the
+container's own loopback inside it. Use
 `--agent-api-base http://host.docker.internal:8000`, or join the agent to the
 API's compose network and name the API's service instead.
 
@@ -94,4 +111,65 @@ back needs both lines: a model id belongs to the provider it was written for.
 ```sh
 printf 'HERMES_PROVIDER=anthropic\nHERMES_MODEL=claude-sonnet-4-5\nANTHROPIC_API_KEY=sk-ant-…\n' >> .env
 docker compose up --build -d
+```
+
+## Test a new image
+
+`compose.yml` builds the agent from source. To test an image someone else built,
+point compose at it instead — from a scratch directory, so the repo stays clean
+and the credential never lands beside your checkout. Copy `compose.yml` there,
+then in the copy replace the service's whole `build:` block with an image, give
+the project a name no other test of yours is using — the home volume is the
+project's, so two tests under one name are two agents sharing one home — and pin
+the platform if the image is not your machine's architecture. Name the image by
+digest, not by tag: a tag is only wherever it was last pushed to point, and this
+container is handed a credential carrying `relay:call` and `payments:request`.
+Test the bytes you were asked to test.
+
+```yaml
+name: agent-test-<yours>      # was: plow-agent; unique per concurrent test
+services:
+  agent:
+    image: <registry>/<repo>@sha256:<digest>
+    platform: linux/amd64     # only when the arch differs
+```
+
+```sh
+# check emulation first, or you will blame the agent for a boot failure
+docker run --rm --platform linux/amd64 alpine uname -m   # -> x86_64
+docker pull --platform linux/amd64 <registry>/<repo>@sha256:<digest>
+```
+
+Then the normal flow, run from that scratch directory so the credential lands
+beside the `compose.yml` you just copied. Nothing installs `plow-agents`, and
+the scratch directory has no `bin/` — so put the checkout's on `PATH` first, or
+spell out its path at every call. `--api-base` goes before the verb:
+
+```sh
+export PATH="/path/to/plow-agents/bin:$PATH"   # or call bin/plow-agents by path
+
+plow-agents login            # prints a code; text it from the phone owning the account
+plow-agents lines            # pick a line
+plow-agents mint <line-uid>  # writes ./plow-credentials (mode 600)
+docker compose up -d         # no --build: the image is already chosen
+docker compose logs -f agent # `plow-init: configured ... as cht_...` = the right line
+plow-agents revoke           # when done
+docker compose down -v
+```
+
+Text the line and it answers; there is no "listening" line to wait for. The
+agent's own API server listens on 127.0.0.1:8642 *inside* the container and
+`compose.yml` publishes no port, so nothing of it reaches this machine. Use a
+line you do not mind writing to — it greets the chat on boot and the history is
+real.
+
+`revoke` says it revoked the key, which is this tool reporting its own success.
+Ask Plow instead: any authenticated call carrying that token answers 401 once
+the key is gone. Copy the token out of `./plow-credentials` first — `revoke`
+deletes the file.
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer <the token from ./plow-credentials>" \
+  https://api.plow.co/v1/chats            # -> 401
 ```
