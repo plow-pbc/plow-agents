@@ -115,3 +115,9 @@ Most developers do not need the remaining CLI flags:
   `host.docker.internal` from Docker.
 
 API roots omit `/v1`; the CLI and agent append it themselves.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 The Plow Collective, Inc.
+
+"Plow" and the Plow logo are trademarks of The Plow Collective, Inc. The license grants no trademark rights.
