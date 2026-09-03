@@ -25,7 +25,7 @@ token. Every later `login` just refreshes that token.
 ```sh
 bin/plow-agents login --new-line   # a brand-new account: get a line too
 bin/plow-agents login              # thereafter; prints a code, text it
-bin/plow-agents lines          # ln_xxx   Ada   +1 555 0100
+bin/plow-agents lines          # ln_xxx   Ada   +1 555 0100   free
 bin/plow-agents mint ln_xxx    # writes ./plow-credentials
 docker compose up --build
 ```
@@ -35,6 +35,19 @@ the agent's source and builds it for this machine's own architecture, which take
 a few minutes; later ones reuse the layers. `PLOW_AGENT_REPO` is what to build —
 a git URL with a `#ref`, or a local directory — and it defaults to
 `https://github.com/plow-pbc/plow-hermes-agent.git#main`.
+
+`lines` ends each row with who is already answering on that line: `free`, or
+`cloud <agent uid>` for one Plow runs, or `local <key id>` for one someone
+started themselves. It is read off the account's credentials, each of which
+names the line it is an assistant on and the cloud agent it belongs to if it has
+one — so a credential that resolves to no single line, this tool's own account
+token included, holds nothing and makes no line look taken.
+
+`mint` refuses a line that is not `free`, naming who holds it. Two agents on one
+line both answer the same texts and the owner cannot tell which replied, so the
+usual answer is to revoke the other one first; `--force` mints anyway, for when
+that is what you meant. Re-minting the line `./plow-credentials` already holds is
+rotation rather than a second agent, and is never refused.
 
 Minting again over an existing `./plow-credentials` revokes the key that file
 names before it writes the new one, so rotation never leaves a live token nobody

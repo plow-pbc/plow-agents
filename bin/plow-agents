@@ -3,7 +3,8 @@
 
     plow-agents login            one-time: text a code, get an account token
     plow-agents login --new-line same, and be given an assistant line
-    plow-agents lines            the assistant lines this account holds
+    plow-agents lines            the assistant lines this account holds, and who
+                                 is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
     plow-agents revoke           revoke the credential ./plow-credentials names
 
@@ -168,6 +169,28 @@ def account_lines(chats: object) -> dict[str, tuple[str, str]]:
     return seen
 
 
+def line_holders(keys: object) -> dict[str, list[str]]:
+    """Who is already answering on each line, uid -> ["cloud <uid>", "local <id>"].
+
+    One call answers it. A key carries both the line its grant resolves to and
+    the cloud agent it belongs to, so a cloud agent needs no second lookup --
+    `GET /v1/agents/cloud` publishes no line at all, only the agent.
+
+    A key whose grant does not resolve to one line -- an account-wide one, this
+    tool's own included -- has no `assistant_line` and so holds nothing here.
+    That is the question being asked: not who *could* write to the line, but who
+    is an assistant on it.
+    """
+    holders: dict[str, list[str]] = {}
+    for key in keys if isinstance(keys, list) else []:
+        line = key.get("assistant_line") or {}
+        if not line.get("uid") or not key.get("is_active"):
+            continue
+        agent_uid = key.get("agent_id")
+        holders.setdefault(line["uid"], []).append(f"cloud {agent_uid}" if agent_uid else f"local {key['id']}")
+    return holders
+
+
 def login(args: argparse.Namespace) -> None:
     # `provision_chat` asks for a line and a chat on it in the same handshake:
     # a real change to the account, and one nothing here can undo. So it is
@@ -207,13 +230,15 @@ def login(args: argparse.Namespace) -> None:
 
 
 def lines(args: argparse.Namespace) -> None:
-    seen = account_lines(call("GET", args.api_base, "/v1/chats", token=account_token(args)))
+    token = account_token(args)
+    seen = account_lines(call("GET", args.api_base, "/v1/chats", token=token))
     if not seen:
         log("No assistant lines on this account yet.")
         log("A line arrives with your first chat; text your Plow number to be given one.")
         return
+    holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
     for uid, (name, number) in sorted(seen.items()):
-        print(f"{uid}\t{name}\t{number}")
+        print(f"{uid}\t{name}\t{number}\t{', '.join(holders.get(uid, [])) or 'free'}")
 
 
 def mint(args: argparse.Namespace) -> None:
@@ -224,6 +249,14 @@ def mint(args: argparse.Namespace) -> None:
     # token no file on this machine names. So the old key goes first -- read
     # before anything can fail, revoked as late as possible before the new one.
     superseded = read_key_id(destination)
+    # Two agents on one line both answer, and the owner cannot tell which. So
+    # the line is checked before anything is written -- and before the revoke
+    # below, which would otherwise retire a working credential on the way to a
+    # refusal. The key this file already names is not a conflict: re-minting
+    # over it is the ordinary rotation, and it is retired two lines down.
+    held = [who for who in line_holders(call("GET", args.api_base, "/v1/api-keys", token=account)).get(line_uid, []) if who != f"local {superseded}"]
+    if held and not args.force:
+        die(f"line:{line_uid} is already answering as {', '.join(held)} -- revoke that one first, or pass --force to run a second agent on the line anyway")
     if superseded is not None:
         revoke_key(args, superseded, account)
         log(f"Revoked key {superseded}, the one {destination} named.")
@@ -278,6 +311,7 @@ def main() -> int:
     it.add_argument("line", help="line uid, as printed by `lines`")
     it.add_argument("--name", default="plow-agent", help="name recorded on the agent credential")
     it.add_argument("--out", default=DEFAULT_OUT, help=f"where to write it, relative to the current directory (default ./{DEFAULT_OUT})")
+    it.add_argument("--force", action="store_true", help="mint even though something is already answering on that line")
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
