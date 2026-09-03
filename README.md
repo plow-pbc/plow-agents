@@ -85,10 +85,14 @@ the cloud's order and for the cloud's reason: the credential goes first, before
 anything that can fail is even looked at, so an agent whose teardown errored has
 already lost the ability to act. The teardown is `docker compose down -v` in the
 directory you run it from, which is where a container the credential belonged to
-would be; a directory with no compose file gets a note saying so rather than an
-error, because the credential is dead either way. What is *not* deleted, here as
-in the cloud, is the chat on the line: it and its history are the owner's, and
-they stay.
+would be -- named explicitly, `-f ./compose.yml --project-directory .`, with any
+`COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` dropped from the environment, so that
+what comes down is this directory's project and never one those happen to name.
+A teardown that could not run -- no compose file here, no docker, no Compose
+plugin -- is reported as exactly that and exits 2: the credential is revoked and
+the agent can do nothing, but its container was not removed and only you can say
+where it went. What is *not* deleted, here as in the cloud, is the chat on the
+line: it and its history are the owner's, and they stay.
 
 ## The credential file
 

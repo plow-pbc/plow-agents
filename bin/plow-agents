@@ -36,6 +36,9 @@ KEY_ID_MARKER = "# plow-agents-key-id: "
 # What `docker compose` itself looks for, in its own precedence order. A
 # directory with none of these has no project here to tear down.
 COMPOSE_FILES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
+# Both would point `docker compose` somewhere other than the directory being
+# torn down, so neither is passed on to it.
+COMPOSE_ENV_OVERRIDES = ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME")
 POLL_S = 3
 TIMEOUT_S = 900
 
@@ -255,28 +258,44 @@ def mint(args: argparse.Namespace) -> None:
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
-def compose_down(directory: str) -> None:
+def compose_down(directory: str) -> str | None:
     """`docker compose down -v` here: the container and the agent's home volume.
 
     Nothing about this may gate the revoke above, which is why it runs last and
-    why an absent compose file or an absent docker is a note rather than a
-    failure. Down is what the cloud's `destroy` is: a machine and its disk,
-    taken away from a credential that can no longer act either way.
+    why it reports rather than raises. Down is what the cloud's `destroy` is: a
+    machine and its disk, taken away from a credential that can no longer act
+    either way. Returns None once the project is gone, otherwise why it is not.
     """
-    if not any(os.path.exists(os.path.join(directory, name)) for name in COMPOSE_FILES):
-        log(f"No compose file in {directory}, so nothing was torn down here.")
-        log("Run `docker compose down -v` from the directory holding the agent's compose.yml to remove its container and home volume.")
-        return
+    compose_file = next((name for name in COMPOSE_FILES if os.path.exists(os.path.join(directory, name))), None)
+    if compose_file is None:
+        return (
+            f"No compose file in {directory}, so nothing was torn down here. Run "
+            "`docker compose down -v` from the directory holding the agent's compose.yml "
+            "to remove its container and home volume."
+        )
     if shutil.which("docker") is None:
-        log(f"No `docker` on PATH: the project in {directory} is untouched.")
-        log("Run `docker compose down -v` there to remove the container and the agent's home volume.")
-        return
+        return (
+            f"No `docker` on PATH: the project in {directory} is untouched. Run "
+            "`docker compose down -v` there to remove the container and the agent's home volume."
+        )
+    # A COMPOSE_FILE or COMPOSE_PROJECT_NAME inherited from the environment would
+    # aim `down -v` at whatever project *those* name -- someone else's containers,
+    # someone else's volumes. The project torn down here is the one this directory
+    # holds and no other, so the file and the directory are named on the command
+    # line and those two variables are dropped from what the subprocess sees.
+    env = {key: value for key, value in os.environ.items() if key not in COMPOSE_ENV_OVERRIDES}
+    compose = ("docker", "compose", "-f", f"./{compose_file}", "--project-directory", ".")
+    if subprocess.run(("docker", "compose", "version"), cwd=directory, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
+        return (
+            f"No `docker compose` on this machine: the project in {directory} is untouched. "
+            "Install the Compose plugin and run `docker compose down -v` there to remove the "
+            "container and the agent's home volume."
+        )
     log(f"Running `docker compose down -v` in {directory} ...")
-    if subprocess.run(("docker", "compose", "down", "-v"), cwd=directory).returncode != 0:
-        # The credential is already gone, so the agent is inert whatever is left
-        # standing. Say what remains rather than pretending the delete finished.
-        die(f"`docker compose down -v` failed in {directory} -- the key is revoked and the agent cannot reach Plow, but its container or home volume may still exist. Run that command again there.")
+    if subprocess.run(compose + ("down", "-v"), cwd=directory, env=env).returncode != 0:
+        return f"`docker compose down -v` failed in {directory}. Run that command again there."
     log("Container and home volume removed.")
+    return None
 
 
 def revoke(args: argparse.Namespace) -> None:
@@ -292,10 +311,30 @@ def revoke(args: argparse.Namespace) -> None:
     if key_id is None:
         die(f"no credential file at {path}")
     revoke_key(args, key_id, account_token(args))
-    os.unlink(path)
-    log(f"Revoked key {key_id} and removed {path}.")
-    compose_down(os.getcwd())
-    log("The agent is gone. The chat on its line stays, with its history.")
+    log(f"Revoked key {key_id}.")
+    # The file names a key that no longer works, so failing to remove it does
+    # not stop the teardown -- the container is the part still able to run.
+    left_behind = []
+    try:
+        os.unlink(path)
+    except OSError as error:
+        left_behind.append(f"{path} could not be removed ({error}). It names a dead key; delete it yourself.")
+    else:
+        log(f"Removed {path}.")
+    standing = compose_down(os.getcwd())
+    if standing is not None:
+        left_behind.append(standing)
+    if not left_behind:
+        log("The agent is gone. The chat on its line stays, with its history.")
+        return
+    for note in left_behind:
+        log(note)
+    log(
+        "The credential is revoked -- the agent cannot reach Plow and can do nothing -- "
+        f"but the delete did not finish{'' if standing is None else ': its container and home volume may still exist'}."
+    )
+    log("The chat on its line stays, with its history.")
+    raise SystemExit(2)
 
 
 def main() -> int:
