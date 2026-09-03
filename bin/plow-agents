@@ -244,8 +244,13 @@ def lines(args: argparse.Namespace) -> None:
 
 def mint(args: argparse.Namespace) -> None:
     line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
-    account = account_token(args)
     destination = os.path.abspath(DEFAULT_OUT)
+    if os.path.isdir(destination):
+        die(
+            f"{destination} is a directory -- run `docker compose down -v && "
+            "rmdir plow-credentials`, then mint again"
+        )
+    account = account_token(args)
     # Writing over a credential without retiring its key would leave a live
     # token no file on this machine names. So the old key goes first -- read
     # before anything can fail, revoked as late as possible before the new one.

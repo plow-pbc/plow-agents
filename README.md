@@ -3,7 +3,7 @@
 Build a Plow agent from a local checkout, run it in Docker, and give it a real
 Plow line. The agent opens an outbound connection to Plow; Compose publishes no
 ports. This repository is one stdlib-only Python CLI plus a minimal
-`compose.yml` example for new agents.
+`compose.example.yml` for new agents.
 
 ## Develop an agent locally
 
@@ -14,6 +14,9 @@ project stay together.
 ```sh
 export PATH="/path/to/plow-agents/bin:$PATH"
 cd /path/to/your-agent
+
+# For a new agent repository that does not have one yet:
+cp /path/to/plow-agents/compose.example.yml compose.yml
 
 # Once on this machine. Add --new-line if this account needs an assistant line.
 plow-agents login
@@ -79,9 +82,9 @@ created `./plow-credentials` as an empty directory; recover with: `docker compos
 
 The account token stays on the host and lets this CLI list lines, mint, and
 revoke. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
-Compose file to mount read-only. Add `/plow-credentials` to that repo's
-`.gitignore`. Re-minting over the file rotates its old key rather than leaving
-a live credential behind.
+Compose file to mount read-only. Add `/plow-credentials` and `/.env` to that
+repo's `.gitignore`. Re-minting over the file rotates its old key rather than
+leaving a live credential behind.
 
 An agent credential is restricted to the chosen line, but it has the same role
 as a hosted Plow agent: that line's chats, Plow inference, `relay:call`, and
@@ -91,9 +94,12 @@ only code you trust with both.
 
 ## Configuration escape hatches
 
-The included `compose.yml` is a minimal `build: .` example, not the runtime
-configuration for every agent. Copy it when starting an agent repository; that
-repository then owns its build, environment, mounts, and project name.
+The included `compose.example.yml` is a minimal `build: .` example, not the
+runtime configuration for this repository or every agent. Copy it when starting
+an agent repository; that repository then owns its build, environment, mounts,
+and project name.
+Inference defaults to Plow; set `HERMES_PROVIDER` and `HERMES_MODEL` in `.env`
+beside `compose.yml` according to the agent image's provider documentation.
 
 Most developers do not need the remaining CLI flags:
 

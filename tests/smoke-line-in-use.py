@@ -45,6 +45,7 @@ KEYS = [
 
 class Stub(BaseHTTPRequestHandler):
     chats: dict = CHATS
+    posts: list[str] = []
     minted: list[dict] = []
     revoked: list[str] = []
 
@@ -64,6 +65,7 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
+        Stub.posts.append(self.path)
         if self.path == "/v1/relay/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
@@ -107,6 +109,13 @@ def main() -> int:
         check("a line nobody answers on reads free", rows.get(FREE), "free")
         check("a cloud agent's line names its agent", rows.get(CLOUD), "cloud agt_7f3")
         check("a self-hosted agent's line names its key", rows.get(LOCAL), "local 22")
+
+        os.mkdir(os.path.join(work, "plow-credentials"))
+        directory = run("mint", FREE, cwd=work, base=base, token=token)
+        check("mint refuses a credential directory", directory.returncode, 1)
+        check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
+        check("and sends no POST", Stub.posts, [])
+        os.rmdir(os.path.join(work, "plow-credentials"))
 
         refused = run("mint", CLOUD, cwd=work, base=base, token=token)
         check("mint refuses an occupied line", refused.returncode, 1)
