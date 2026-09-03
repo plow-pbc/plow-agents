@@ -115,3 +115,78 @@ Most developers do not need the remaining CLI flags:
   `host.docker.internal` from Docker.
 
 API roots omit `/v1`; the CLI and agent append it themselves.
+
+## Benchmark an image: `bench-cache`
+
+`bench-cache` answers one question with numbers: what does a change to the
+agent image cost, or save, per conversation. It was written for the prompt-caching
+change (plow-hermes-agent #27) and is not specific to it — a variant is just an
+image digest.
+
+One `run` is one variant. Boot an agent from one digest, drive a fixed
+conversation through Plow, read the usage rows that conversation produced, tear
+the agent down. Two runs of two digests is the before/after, and because
+`bench/conversation.json` is data in this repo, the image is the only thing that
+differs between them.
+
+```sh
+export PATH="/path/to/plow-agents/bin:$PATH"
+plow-agents lines                      # pick a line whose STATUS is `free`
+
+bench-cache run --label before --line ln_xxx \
+  --image <registry>/plow-hermes-agent@sha256:<digest-before> \
+  --api-revision <deployed api sha>
+
+bench-cache run --label after --line ln_xxx \
+  --image <registry>/plow-hermes-agent@sha256:<digest-after> \
+  --api-revision <deployed api sha>
+
+bench-cache report run-before-*.json run-after-*.json > bench.md
+```
+
+Run each variant twice and compare the two before believing either: an agent's
+turn time moves with the provider's day.
+
+### What it needs
+
+- **A free line.** `mint` refuses a line that already answers, and this tool
+  never passes `--force`. The agent greets the chat on boot and the history is
+  real, so use a line you do not mind writing to.
+- **The image by digest.** `--image` refuses a tag. A tag is only wherever it
+  was last pushed to point, and this container is handed a credential carrying
+  `relay:call` and `payments:request`.
+- **`plow-ops` on `PATH`** for the usage rows. There is no owner-facing API for
+  them: `/v1/usage` aggregates by model, line and day, and never splits prompt
+  from completion or carries the cache counters. Without `plow-ops` the run
+  still produces its timing table and says the usage half is missing.
+- **A compose project name no other run of yours is using** (`--project`). The
+  home volume belongs to the project, so two runs under one name are two agents
+  sharing one home.
+
+### What it does not measure
+
+- **Cache counters, until the API records them.** `cache_read_tokens` and
+  `cache_write_tokens` arrive on `llm_usage` with plow **#1710**. Before that
+  build the columns do not exist, and the tool says so in the report header
+  rather than printing zeros — "cached nothing" and "did not measure" are the
+  two readings a benchmark must never confuse. It reads the live column list at
+  run time, so it starts reporting them the boot after #1710 deploys, with no
+  change here.
+- **A trustworthy cost for a caching variant, on that same older build.** That
+  build prices a streaming request off `prompt_tokens` alone, which litellm has
+  already folded cache reads into — so a cache read is billed at the full input
+  rate and `cost_usd` for a caching variant reads as no saving at all. #1710
+  fixes that too. Before it, run the `before` variant only.
+- **Ground truth.** `cost_usd` is litellm's cost map times Plow's markup, not an
+  invoice. Cross-check a run against the provider's own usage for the same
+  window before quoting a saving to anyone.
+- **The deployed API build.** There is no version endpoint; `--api-revision` is
+  what you pass in, and the header says `unverified` when you don't. Read it
+  from the running service:
+
+```sh
+plow-ops aws ecs describe-services --cluster plow-prod --services plow-prod-api \
+  | jq -r '.services[0].taskDefinition'
+plow-ops aws ecs describe-task-definition --task-definition plow-prod-api:<n> \
+  | jq -r '.taskDefinition.containerDefinitions[].image'
+```

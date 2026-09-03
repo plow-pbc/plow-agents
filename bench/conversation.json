@@ -1,0 +1,22 @@
+{
+  "name": "cache-bench-v1",
+  "why": "Fifteen turns that grow one context rather than fifteen unrelated questions. The prefix a cache can hit is the system prompt, the tool schemas and the history, so the turns deliberately (a) keep referring back, which makes the history the bulk of every later request, and (b) ask for things the agent has to reach a tool for, which is what puts tool results in that history. Turn text is fixed so two runs differ in the image under test and nothing else.",
+  "reply_timeout_s": 300,
+  "turns": [
+    "Hi — I'm benchmarking you today. Answer briefly, and don't ask me clarifying questions; if something is ambiguous, pick a reasonable reading and say which you picked.",
+    "What's today's date and the current time where you are running? Say how you got it.",
+    "List the files in your home directory, then tell me which one holds your identity.",
+    "How many lines is that identity file, and what's the first line of it?",
+    "What's your configured model and inference provider? Read it from your config rather than from memory.",
+    "Make a note to yourself: 'benchmark run in progress, do not reorganise skills'. Then read it back to me.",
+    "What skills do you have? Give me just the names, grouped by category.",
+    "Pick the skill whose name sorts first alphabetically and summarise what it does in one sentence.",
+    "Earlier you told me the first line of your identity file. Quote it back to me exactly, then say whether the skill you just summarised is consistent with it.",
+    "Create a file in your scratch space called bench.txt containing the numbers 1 through 20, one per line. Confirm the byte count.",
+    "Read bench.txt back and give me the sum of the numbers in it. Show the command you used.",
+    "Append the numbers 21 through 30 to that file, then tell me the new sum and the new line count.",
+    "Of everything you have done in this conversation so far, which step took the most steps to complete? Answer from what actually happened, not from a guess.",
+    "Summarise this whole conversation in five bullet points, in the order things happened.",
+    "Last one: delete bench.txt, confirm it is gone, and tell me the note you made yourself back in turn six."
+  ]
+}

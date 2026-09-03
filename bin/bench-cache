@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""Measure what prompt caching costs and saves, on a real agent. Stdlib only.
+
+    bench-cache run --image <ref@sha256:...> --line ln_xxx --label before
+    bench-cache report run-before-1.json run-after-1.json
+
+One variant per `run`: boot an agent from ONE image digest, drive a fixed
+conversation through Plow, read the usage rows that conversation produced, tear
+the agent down. Two runs of two images is the before/after; the conversation is
+`bench/conversation.json`, so the image under test is the only thing that
+differs between them.
+
+Nothing here decides anything. It boots what you name, on the line you name,
+and prints what it measured -- including the parts it could not measure, which
+is the whole point of the header it writes at the top of every report.
+
+Auth is `plow-agents`'s: this shells out to it for `mint` and `revoke`, and
+reads the same account token for the chat calls. Usage rows have no owner-facing
+API (`/v1/usage` aggregates, and does not split prompt from completion or carry
+the cache counters), so they come from the documented read-only prod path,
+`plow-ops db query`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, NoReturn
+
+DEFAULT_API_BASE = "https://api.plow.co"
+TOKEN_FILE = Path.home() / ".config" / "plow" / "token"
+BOOT_MARKER = "plow-init: configured"
+BOOT_TIMEOUT_S = 600
+POLL_S = 2
+
+# The row shape #1710 adds. Absent on an older API build, and its absence is
+# reported rather than defaulted to zero: "no cache columns" and "cached
+# nothing" are the two readings a benchmark must never confuse.
+CACHE_COLUMNS = ("cache_read_tokens", "cache_write_tokens")
+BASE_COLUMNS = ("id", "session_id", "created_at", "model", "prompt_tokens", "completion_tokens", "total_tokens", "cost_usd", "status")
+
+
+def log(message: str = "") -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def die(message: str) -> NoReturn:
+    raise SystemExit(f"bench-cache: {message}")
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(argv, text=True, capture_output=True, **kwargs)
+
+
+def api(method: str, url: str, token: str, body: dict | None = None) -> tuple[int, Any]:
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw, status = response.read(), response.status
+    except urllib.error.HTTPError as error:
+        raw, status = error.read(), error.code
+    except OSError as error:
+        die(f"cannot reach {url}: {error}")
+    try:
+        return status, json.loads(raw or b"null")
+    except ValueError:
+        return status, raw.decode(errors="replace")
+
+
+# -- the parts that touch the world ------------------------------------------
+
+
+def write_compose(directory: Path, image: str, project: str, platform: str | None) -> Path:
+    """The `Test a new image` compose, with the image pinned by digest.
+
+    Digest, never a tag: this container is handed a credential carrying
+    `relay:call` and `payments:request`, and a tag is only wherever it was last
+    pushed to point. `run` refuses anything else.
+    """
+    platform_line = f"    platform: {platform}\n" if platform else ""
+    (directory / "compose.yml").write_text(
+        f"name: {project}\n"
+        "services:\n"
+        "  agent:\n"
+        f"    image: {image}\n"
+        f"{platform_line}"
+        "    volumes:\n"
+        "      - ./plow-credentials:/var/lib/plow/credentials.host:ro\n"
+        "      - agent-home:/var/lib/hermes\n"
+        "    stop_grace_period: 35s\n"
+        "volumes:\n"
+        "  agent-home:\n"
+    )
+    return directory / "compose.yml"
+
+
+def boot(directory: Path, line: str, api_base: str, plow_agents: str) -> None:
+    minted = run([plow_agents, "--api-base", api_base, "mint", line], cwd=directory)
+    if minted.returncode != 0:
+        die(f"mint failed for {line}: {minted.stderr.strip() or minted.stdout.strip()}")
+    up = run(["docker", "compose", "up", "-d"], cwd=directory)
+    if up.returncode != 0:
+        die(f"compose up failed: {up.stderr.strip()}")
+    deadline = time.time() + BOOT_TIMEOUT_S
+    while time.time() < deadline:
+        logs = run(["docker", "compose", "logs", "--no-color", "agent"], cwd=directory)
+        if BOOT_MARKER in logs.stdout:
+            log(f"booted: {[l for l in logs.stdout.splitlines() if BOOT_MARKER in l][-1].strip()}")
+            return
+        if "plow-init:" in logs.stdout and "configured" not in logs.stdout:
+            failure = [l for l in logs.stdout.splitlines() if "plow-init:" in l][-3:]
+            if any("exit" in l.lower() or "refus" in l.lower() for l in failure):
+                die("plow-init failed:\n  " + "\n  ".join(failure))
+        time.sleep(POLL_S)
+    die(f"no {BOOT_MARKER!r} within {BOOT_TIMEOUT_S}s -- the agent never took its line")
+
+
+def teardown(directory: Path, api_base: str, plow_agents: str, keep: bool) -> None:
+    """Revoke first, then remove the container and its home.
+
+    Revoke first on purpose: `compose down -v` deletes the home the credential
+    was mounted into, and a credential outliving the agent that held it is the
+    one piece of this that is not merely untidy.
+    """
+    revoked = run([plow_agents, "--api-base", api_base, "revoke"], cwd=directory)
+    log(f"revoke: {(revoked.stdout + revoked.stderr).strip().splitlines()[-1] if (revoked.stdout + revoked.stderr).strip() else 'no output'}")
+    if keep:
+        log(f"--keep: leaving the container and {directory} in place")
+        return
+    run(["docker", "compose", "down", "-v"], cwd=directory)
+
+
+def home_chat(token: str, api_base: str, line: str) -> str:
+    status, body = api("GET", f"{api_base}/v1/chats", token)
+    if status != 200 or not isinstance(body, dict):
+        die(f"GET /v1/chats -> {status}: {body}")
+    for chat in body.get("data", []):
+        lines = [p.get("line", {}).get("uid") for p in chat.get("participants", [])]
+        if line in lines and chat.get("status") == "active":
+            return chat["uid"]
+    die(f"no active chat on {line} -- has the agent greeted it yet?")
+
+
+def drive(token: str, api_base: str, chat: str, turns: list[str], reply_timeout_s: int) -> list[dict]:
+    """Send each turn, wait for the agent's reply, record the two clocks.
+
+    ttft_s is the wall time to the FIRST assistant message after ours, and
+    total_s the time until no further assistant message arrives for one poll --
+    an agent that narrates before its last tool call produces several, and the
+    turn is not over at the first one.
+    """
+    records = []
+    for index, text in enumerate(turns, start=1):
+        sent_at = time.time()
+        status, posted = api("POST", f"{api_base}/v1/chats/{chat}/messages", token, {"text": text})
+        if status not in (200, 201):
+            die(f"turn {index}: POST message -> {status}: {posted}")
+        after = posted.get("uid") if isinstance(posted, dict) else None
+        first_reply_at: float | None = None
+        last_seen: float | None = None
+        replies: list[str] = []
+        deadline = sent_at + reply_timeout_s
+        while time.time() < deadline:
+            time.sleep(POLL_S)
+            status, page = api("GET", f"{api_base}/v1/chats/{chat}/messages?limit=20", token)
+            if status != 200 or not isinstance(page, dict):
+                continue
+            fresh = []
+            for message in reversed(page.get("data", [])):
+                if message.get("uid") == after:
+                    fresh = []
+                    continue
+                if message.get("role") == "assistant" or message.get("sender", {}).get("type") == "agent":
+                    fresh.append(message)
+            new = [m for m in fresh if m.get("uid") not in replies]
+            if new:
+                if first_reply_at is None:
+                    first_reply_at = time.time()
+                last_seen = time.time()
+                replies.extend(m.get("uid") for m in new)
+            if first_reply_at is not None and last_seen is not None and time.time() - last_seen > 3 * POLL_S:
+                break
+        records.append(
+            {
+                "turn": index,
+                "text": text,
+                "sent_at": datetime.fromtimestamp(sent_at, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "ttft_s": round(first_reply_at - sent_at, 2) if first_reply_at else None,
+                "total_s": round((last_seen or time.time()) - sent_at, 2),
+                "replies": len(replies),
+                "timed_out": first_reply_at is None,
+            }
+        )
+        log(f"turn {index:>2}: ttft={records[-1]['ttft_s']}s total={records[-1]['total_s']}s replies={len(replies)}")
+    return records
+
+
+def usage_rows(started: str, ended: str, session_id: int | None) -> tuple[list[dict], list[str], str | None]:
+    """The usage rows this run produced, from the read-only prod path.
+
+    Returns (rows, columns, note). `note` is set when the API build behind the
+    run predates plow #1710 and therefore recorded no cache counters -- the
+    caller reports that instead of printing zeros, which would read as "cached
+    nothing" rather than "did not measure".
+    """
+    if shutil.which("plow-ops") is None:
+        return [], [], "plow-ops not on PATH -- usage rows not read; see README for the manual query"
+    described = run(["plow-ops", "db", "describe", "llm_usage"])
+    if described.returncode != 0:
+        return [], [], f"plow-ops db describe failed: {described.stderr.strip()}"
+    present = {line.split(",")[0] for line in described.stdout.splitlines()[1:] if line.strip()}
+    missing = [column for column in CACHE_COLUMNS if column not in present]
+    columns = list(BASE_COLUMNS) + [c for c in CACHE_COLUMNS if c in present]
+    where = f"created_at >= '{started}' AND created_at <= '{ended}'"
+    if session_id is not None:
+        where += f" AND session_id = {session_id}"
+    query = f"SELECT {', '.join(columns)} FROM llm_usage WHERE {where} ORDER BY created_at"
+    result = run(["plow-ops", "db", "query", query])
+    if result.returncode != 0:
+        return [], columns, f"usage query failed: {result.stderr.strip()}"
+    lines = [l for l in result.stdout.splitlines() if l.strip()]
+    header = lines[0].split(",") if lines else columns
+    rows = [dict(zip(header, line.split(","))) for line in lines[1:]]
+    note = None
+    if missing:
+        note = (
+            f"this API build has no {', '.join(missing)} on llm_usage -- it predates plow #1710, "
+            "so cache reads and writes were NOT recorded and the cache-hit ratio cannot be computed from Plow. "
+            "On the streaming path that build also prices a cache read at the full input rate, so cost_usd "
+            "for a caching variant would be an over-estimate."
+        )
+    return rows, header, note
+
+
+# -- reporting ---------------------------------------------------------------
+
+
+def to_number(value: str | None) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def summarise(record: dict) -> dict:
+    rows = record["usage_rows"]
+    turns = record["turns"]
+    ttfts = [t["ttft_s"] for t in turns if t["ttft_s"] is not None]
+    prompt = sum(to_number(r.get("prompt_tokens")) for r in rows)
+    completion = sum(to_number(r.get("completion_tokens")) for r in rows)
+    read = sum(to_number(r.get("cache_read_tokens")) for r in rows) if record["has_cache_columns"] else None
+    write = sum(to_number(r.get("cache_write_tokens")) for r in rows) if record["has_cache_columns"] else None
+    billed_input = prompt + (read or 0) + (write or 0) if record["has_cache_columns"] else prompt
+    return {
+        "requests": len(rows),
+        "turns": len(turns),
+        "timed_out_turns": sum(1 for t in turns if t["timed_out"]),
+        "prompt_tokens": int(prompt),
+        "completion_tokens": int(completion),
+        "cache_read_tokens": int(read) if read is not None else None,
+        "cache_write_tokens": int(write) if write is not None else None,
+        "cache_hit_ratio": round(read / billed_input, 4) if read is not None and billed_input else None,
+        "cost_usd": round(sum(to_number(r.get("cost_usd")) for r in rows), 6),
+        "mean_ttft_s": round(sum(ttfts) / len(ttfts), 2) if ttfts else None,
+        "mean_turn_s": round(sum(t["total_s"] for t in turns) / len(turns), 2) if turns else None,
+    }
+
+
+def header(record: dict) -> list[str]:
+    return [
+        f"## {record['label']}",
+        "",
+        "| what | value |",
+        "|---|---|",
+        f"| image | `{record['image']}` |",
+        f"| line | `{record['line']}` |",
+        f"| api base | {record['api_base']} |",
+        f"| api revision | {record['api_revision'] or '**unverified** (no version endpoint; pass --api-revision)'} |",
+        f"| conversation | `{record['conversation']}` ({len(record['turns'])} turns) |",
+        f"| window (UTC) | {record['started']} → {record['ended']} |",
+        f"| cache columns | {'present' if record['has_cache_columns'] else '**absent** (API predates plow #1710)'} |",
+        "",
+    ]
+
+
+def render(records: list[dict]) -> str:
+    out: list[str] = ["# bench-cache", "", f"Rendered {now()} UTC.", ""]
+    for record in records:
+        out += header(record)
+        if record.get("note"):
+            out += [f"> {record['note']}", ""]
+        out += ["| turn | ttft s | total s | replies | timed out |", "|---:|---:|---:|---:|---|"]
+        for turn in record["turns"]:
+            out.append(f"| {turn['turn']} | {turn['ttft_s'] if turn['ttft_s'] is not None else '—'} | {turn['total_s']} | {turn['replies']} | {'YES' if turn['timed_out'] else ''} |")
+        summary = summarise(record)
+        out += ["", "| metric | value |", "|---|---:|"]
+        for key, value in summary.items():
+            out.append(f"| {key} | {'—' if value is None else value} |")
+        out.append("")
+    if len(records) >= 2:
+        before, after = summarise(records[0]), summarise(records[-1])
+        out += ["## before → after", "", "| metric | before | after | change |", "|---|---:|---:|---:|"]
+        for key in ("cost_usd", "prompt_tokens", "cache_read_tokens", "cache_hit_ratio", "mean_ttft_s"):
+            b, a = before.get(key), after.get(key)
+            if b is None or a is None:
+                change = "— (not measured)"
+            elif b:
+                change = f"{(a - b) / b * 100:+.1f}%"
+            else:
+                change = "n/a"
+            out.append(f"| {key} | {'—' if b is None else b} | {'—' if a is None else a} | {change} |")
+        out.append("")
+    return "\n".join(out)
+
+
+# -- entry points ------------------------------------------------------------
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    if "@sha256:" not in args.image:
+        die("--image must be pinned by digest (repo@sha256:...), not by tag")
+    token_file = Path(args.token_file) if args.token_file else TOKEN_FILE
+    if not token_file.exists():
+        die(f"no account token at {token_file} -- run `plow-agents login` first")
+    token = token_file.read_text().strip()
+    plow_agents = args.plow_agents or shutil.which("plow-agents") or str(Path(__file__).with_name("plow-agents"))
+    conversation = json.loads(Path(args.conversation).read_text())
+
+    directory = Path(args.workdir or f"./bench-{args.label}-{int(time.time())}").resolve()
+    directory.mkdir(parents=True, exist_ok=False)
+    write_compose(directory, args.image, args.project or f"agent-bench-{args.label}", args.platform)
+    log(f"scratch: {directory}")
+
+    started = now()
+    try:
+        boot(directory, args.line, args.api_base, plow_agents)
+        chat = home_chat(token, args.api_base, args.line)
+        log(f"chat: {chat}")
+        turns = drive(token, args.api_base, chat, conversation["turns"], conversation.get("reply_timeout_s", 300))
+    finally:
+        ended = now()
+        teardown(directory, args.api_base, plow_agents, args.keep)
+
+    rows, columns, note = usage_rows(started, ended, args.session_id)
+    record = {
+        "label": args.label,
+        "image": args.image,
+        "line": args.line,
+        "api_base": args.api_base,
+        "api_revision": args.api_revision,
+        "conversation": args.conversation,
+        "started": started,
+        "ended": ended,
+        "turns": turns,
+        "usage_rows": rows,
+        "has_cache_columns": all(c in columns for c in CACHE_COLUMNS),
+        "note": note,
+    }
+    out = Path(args.out or f"run-{args.label}-{started.replace(' ', 'T').replace(':', '')}.json")
+    out.write_text(json.dumps(record, indent=1))
+    log(f"raw: {out}")
+    print(render([record]))
+
+
+def cmd_report(args: argparse.Namespace) -> None:
+    print(render([json.loads(Path(p).read_text()) for p in args.records]))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="bench-cache", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    r = sub.add_parser("run", help="boot one image, drive the conversation, read its usage, tear down")
+    r.add_argument("--image", required=True, help="repo@sha256:... -- digest, never a tag")
+    r.add_argument("--line", required=True, help="line uid; must be `free` in `plow-agents lines`")
+    r.add_argument("--label", required=True, help="before | after | anything you will recognise")
+    r.add_argument("--api-base", default=DEFAULT_API_BASE)
+    r.add_argument("--api-revision", default=None, help="the deployed API sha, for the report header")
+    r.add_argument("--conversation", default=str(Path(__file__).resolve().parent.parent / "bench" / "conversation.json"))
+    r.add_argument("--project", default=None, help="compose project name; must be unique per concurrent run")
+    r.add_argument("--platform", default=None, help="e.g. linux/amd64 when the image arch differs")
+    r.add_argument("--workdir", default=None)
+    r.add_argument("--session-id", type=int, default=None, help="scope the usage query to one session")
+    r.add_argument("--token-file", default=None)
+    r.add_argument("--plow-agents", default=None)
+    r.add_argument("--out", default=None)
+    r.add_argument("--keep", action="store_true", help="leave the container up after the run")
+    r.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("report", help="re-render one or more saved runs; first is before, last is after")
+    p.add_argument("records", nargs="+")
+    p.set_defaults(func=cmd_report)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
