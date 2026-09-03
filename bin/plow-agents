@@ -261,8 +261,8 @@ def mint(args: argparse.Namespace) -> None:
     # refusal. The key this file already names is not a conflict: re-minting
     # over it is the ordinary rotation, and it is retired two lines down.
     held = [who for who in line_holders(call("GET", args.api_base, "/v1/api-keys", token=account)).get(line_uid, []) if who != f"local {superseded}"]
-    if held and not args.force:
-        die(f"line:{line_uid} is already answering as {', '.join(held)} -- revoke that one first, or pass --force to run a second agent on the line anyway")
+    if held:
+        die(f"line:{line_uid} is already answering as {', '.join(held)} -- revoke that one first")
     if superseded is not None:
         revoke_key(args, superseded, account)
         log(f"Revoked key {superseded}, the one {destination} named.")
@@ -318,7 +318,6 @@ def main() -> int:
 
     it = verbs.add_parser("mint", help="a credential for one line, written to ./plow-credentials")
     it.add_argument("line", help="line uid, as printed by `lines`")
-    it.add_argument("--force", action="store_true", help="mint even though something is already answering on that line")
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 

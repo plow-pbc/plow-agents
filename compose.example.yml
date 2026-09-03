@@ -1,5 +1,4 @@
 # Minimal example for an agent repository. Copy it there and adapt as needed.
-name: plow-agent
 
 services:
   agent:

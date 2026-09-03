@@ -41,7 +41,6 @@ ln_xxx  Ada     +1 555 0100    free
 
 Status is `free`, `cloud <agent uid>`, or `local <key id>`. `mint` refuses a
 line that already has an agent because two agents would answer the same chat.
-Use `--force` only when that is intentional.
 
 The first build can take a few minutes. When the log says `plow-init:
 configured ... as cht_...`, text the selected line from your phone and the

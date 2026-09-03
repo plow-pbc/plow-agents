@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""`lines` and `mint` against a stub API holding all three states.
+"""`lines`, `mint`, and `revoke` against a stub API.
 
-Standard library only, no network, no Plow account: a stub that answers the two
-reads `lines` makes and the mint `mint` makes, and the real CLI driven against
-it with `--api-base`. What is under test is the join -- which line each key
-claims, and whether a line already answering refuses a second agent.
+Standard library only, no network, no Plow account: drive the real CLI against
+a local stub with `--api-base`.
 
     python3 tests/smoke-line-in-use.py
 """
@@ -82,8 +80,8 @@ class Stub(BaseHTTPRequestHandler):
         pass
 
 
-def run(*argv: str, cwd: str, base: str, token: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, CLI, "--api-base", base, "--token-file", token, *argv], cwd=cwd, capture_output=True, text=True)
+def run(*argv: str, cwd: str, base: str, token: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, CLI, "--api-base", base, "--token-file", token, *argv], cwd=cwd, env=env, capture_output=True, text=True)
 
 
 def main() -> int:
@@ -123,13 +121,10 @@ def main() -> int:
         check("and writes nothing", os.path.exists(os.path.join(work, "plow-credentials")), False)
         check("and mints nothing", Stub.minted, [])
 
-        forced = run("mint", CLOUD, "--force", cwd=work, base=base, token=token)
-        check("--force mints anyway", forced.returncode, 0)
-        check("and writes the credential", os.path.exists(os.path.join(work, "plow-credentials")), True)
-        check("mint does not prescribe a Compose command", "docker compose" in forced.stderr, False)
-
         free = run("mint", FREE, cwd=work, base=base, token=token)
-        check("a free line mints without --force", free.returncode, 0)
+        check("a free line mints", free.returncode, 0)
+        check("and writes the credential", os.path.exists(os.path.join(work, "plow-credentials")), True)
+        check("mint does not prescribe a Compose command", "docker compose" in free.stderr, False)
 
         # Re-minting the line this directory's own credential already holds is
         # rotation, not a second agent -- key 22 is `local 22` on that line and
@@ -143,6 +138,29 @@ def main() -> int:
         Stub.chats = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("an account with no line gets the activation command", "login --new-line" in empty.stderr, True)
+
+        credential = os.path.join(work, "plow-credentials")
+        with open(credential, "w") as handle:
+            handle.write("# plow-agents-key-id: 42\nPLOW_API_BASE=x\nPLOW_AGENT_TOKEN=y\n")
+        fake_bin = os.path.join(work, "bin")
+        os.mkdir(fake_bin)
+        docker_called = os.path.join(work, "docker-called")
+        docker = os.path.join(fake_bin, "docker")
+        with open(docker, "w") as handle:
+            handle.write(f"#!/bin/sh\n: > {docker_called!r}\nexit 99\n")
+        os.chmod(docker, 0o755)
+        revoked = run("revoke", cwd=work, base=base, token=token, env=dict(os.environ, PATH=fake_bin))
+        check("revoke exits 0", revoked.returncode, 0)
+        check("the named key was revoked", Stub.revoked[-1], "42")
+        check("the credential file was removed", os.path.exists(credential), False)
+        check("docker was never invoked", os.path.exists(docker_called), False)
+
+        with open(credential, "w") as handle:
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=y\n")
+        malformed = run("revoke", cwd=work, base="http://127.0.0.1:9", token=token)
+        check("a credential without one key id is refused", malformed.returncode != 0, True)
+        check("the malformed credential remains", os.path.exists(credential), True)
+        check("the error points to the dashboard", "dashboard" in malformed.stderr, True)
 
     server.shutdown()
     for failure in failures:
