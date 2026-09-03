@@ -265,24 +265,21 @@ def lines(args: argparse.Namespace) -> None:
 
 def profile(args: argparse.Namespace) -> None:
     token = account_token(args)
-    updated = None
-    if args.name is not None or args.photo is not None:
+    if args.show:
+        if args.name is not None or args.photo is not None:
+            die("profile --show cannot be combined with --name or --photo")
+        result = call("GET", args.api_base, "/v1/auth/profile", token=token)
+    else:
         if args.name is None or args.photo is None:
-            die("profile requires both --name and --photo")
-        updated = call(
+            die("profile requires both --name and --photo, or --show")
+        result = call(
             "PATCH",
             args.api_base,
             "/v1/auth/profile",
             token=token,
             body={"display_name": args.name, "photo_url": args.photo},
         )
-    if args.show or updated is None:
-        status, shown = request("GET", args.api_base + "/v1/auth/profile", token=token)
-        if status // 100 == 2:
-            updated = shown
-        elif updated is None:
-            die(f"GET /v1/auth/profile answered {status}")
-    print(json.dumps(updated, sort_keys=True))
+    print(json.dumps(result, sort_keys=True))
 
 
 def mint(args: argparse.Namespace) -> None:
@@ -382,7 +379,7 @@ def main() -> int:
     it = verbs.add_parser("profile", help="set or show this account's public profile")
     it.add_argument("--name", help="public display name")
     it.add_argument("--photo", help="public https photo URL")
-    it.add_argument("--show", action="store_true", help="read the current profile after updating")
+    it.add_argument("--show", action="store_true", help="show the current profile")
     it.set_defaults(run=profile)
 
     it = verbs.add_parser("mint", help="a credential for one line, written to ./plow-credentials")
