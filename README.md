@@ -154,3 +154,14 @@ docker compose down -v
 Text the line and it answers; there is no "listening" line to wait for, as the
 agent binds no port. Use a line you do not mind writing to — it greets the chat
 on boot and the history is real.
+
+`revoke` says it revoked the key, which is this tool reporting its own success.
+Ask Plow instead: any authenticated call carrying that token answers 401 once
+the key is gone. Copy the token out of `./plow-credentials` first — `revoke`
+deletes the file.
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer <the token from ./plow-credentials>" \
+  https://api.plow.co/v1/chats            # -> 401
+```
