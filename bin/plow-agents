@@ -6,7 +6,7 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
-    plow-agents revoke           revoke that credential and remove its file
+    plow-agents revoke [line]    revoke a local credential by file or line
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
 revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
@@ -29,9 +29,6 @@ from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
 CREDENTIAL_FILE = "plow-credentials"
-# The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
-# NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
-KEY_ID_MARKER = "# plow-agents-key-id: "
 POLL_S = 3
 TIMEOUT_S = 900
 
@@ -102,19 +99,21 @@ def write_private(path: str, body: str) -> str:
     return destination
 
 
-def read_key_id(path: str) -> str | None:
-    """The key id `mint` recorded in a credential file, or None if there is no
-    such file. A file that is there but names no single id stops the run: it is
-    a live credential this tool has no safe way to retire."""
+def credential_key_id(path: str, keys: object) -> str | None:
+    """Find the one API key whose published prefix matches this credential."""
     try:
         with open(path) as handle:
             content = handle.read()
     except OSError:
         return None
-    ids = [line[len(KEY_ID_MARKER):].strip() for line in content.splitlines() if line.startswith(KEY_ID_MARKER)]
-    if len(ids) != 1 or not ids[0].isdigit():
-        die(f"{path} does not name exactly one key id -- run `plow-agents revoke <line-uid>`, or revoke it in the Plow dashboard and delete the file")
-    return ids[0]
+    tokens = [line.split("=", 1)[1] for line in content.splitlines() if line.startswith("PLOW_AGENT_TOKEN=")]
+    prefix = tokens[0][5:13] if len(tokens) == 1 and tokens[0].startswith("plow_") else ""
+    matches = [str(key["id"]) for key in (keys if isinstance(keys, list) else []) if key.get("key_prefix") is not None and key["key_prefix"] == prefix]
+    if not matches:
+        die(f"no key matches the token in {path}")
+    if len(matches) > 1:
+        die(f"more than one key matches the token in {path}")
+    return matches[0]
 
 
 def revoke_key(args: argparse.Namespace, key_id: str, token: str) -> None:
@@ -251,16 +250,17 @@ def mint(args: argparse.Namespace) -> None:
             "rmdir plow-credentials`, then mint again"
         )
     account = account_token(args)
+    keys = call("GET", args.api_base, "/v1/api-keys", token=account)
     # Writing over a credential without retiring its key would leave a live
     # token no file on this machine names. So the old key goes first -- read
     # before anything can fail, revoked as late as possible before the new one.
-    superseded = read_key_id(destination)
+    superseded = credential_key_id(destination, keys)
     # Two agents on one line both answer, and the owner cannot tell which. So
     # the line is checked before anything is written -- and before the revoke
     # below, which would otherwise retire a working credential on the way to a
     # refusal. The key this file already names is not a conflict: re-minting
     # over it is the ordinary rotation, and it is retired two lines down.
-    held = [who for who in line_holders(call("GET", args.api_base, "/v1/api-keys", token=account)).get(line_uid, []) if who != f"local {superseded}"]
+    held = [who for who in line_holders(keys).get(line_uid, []) if who != f"local {superseded}"]
     if held:
         die(f"line:{line_uid} is already answering as {', '.join(held)} -- revoke that one first")
     if superseded is not None:
@@ -279,10 +279,7 @@ def mint(args: argparse.Namespace) -> None:
     # A token carrying these would break out of its own line in the file below.
     if any(character in token for character in "\r\n\"\\"):
         die("the minted token carries quote or newline characters")
-    credential = (
-        "# The API root, without /v1 -- the agent appends its own.\n"
-        f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
-    )
+    credential = f"PLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
     written = write_private(destination, credential)
     log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
     log(f"Wrote {written} (mode 600).")
@@ -292,22 +289,28 @@ def revoke(args: argparse.Namespace) -> None:
     """Revoke the credential file's key, or recover one local key by line."""
     path = os.path.abspath(CREDENTIAL_FILE)
     account = account_token(args)
+    keys = call("GET", args.api_base, "/v1/api-keys", token=account)
     if args.line:
         line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
-        holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=account)).get(line_uid, [])
+        holders = line_holders(keys).get(line_uid, [])
         if len(holders) != 1:
             die(f"line:{line_uid} has {len(holders)} active holders -- expected exactly one local credential")
         if not holders[0].startswith("local "):
             die(f"line:{line_uid} is held by {holders[0]} -- delete that agent in Plow")
         key_id = holders[0].removeprefix("local ")
     else:
-        key_id = read_key_id(path)
+        key_id = credential_key_id(path, keys)
         if key_id is None:
             die(f"no credential file at {path}")
     revoke_key(args, key_id, account)
     log(f"Revoked key {key_id}.")
     if args.line:
-        return
+        file_key_id = credential_key_id(path, keys)
+        if file_key_id is None:
+            return
+        if file_key_id != key_id:
+            log(f"Left {path} in place: it names key {file_key_id}, not the revoked key {key_id}.")
+            return
     try:
         os.unlink(path)
     except OSError as error:

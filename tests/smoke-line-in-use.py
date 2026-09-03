@@ -30,14 +30,14 @@ CHATS = {"data": [{"participants": [{"type": "agent", "line": line(uid, name)}]}
 
 KEYS = [
     # The cloud agent's credential: a line, and an agent_id naming its agent.
-    {"id": 11, "is_active": True, "agent_id": "agt_7f3", "assistant_line": line(CLOUD, "Cloud")},
+    {"id": 11, "key_prefix": "cloud111", "is_active": True, "agent_id": "agt_7f3", "assistant_line": line(CLOUD, "Cloud")},
     # A self-hosted one: the same shape, no agent behind it.
-    {"id": 22, "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")},
+    {"id": 22, "key_prefix": "local222", "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")},
     # Revoked, on the line that must still read `free`.
-    {"id": 33, "is_active": False, "agent_id": None, "assistant_line": line(FREE, "Free")},
+    {"id": 33, "key_prefix": "free3333", "is_active": False, "agent_id": None, "assistant_line": line(FREE, "Free")},
     # This tool's own account key: account-wide, so it resolves to no line and
     # must not make every line look taken.
-    {"id": 44, "is_active": True, "agent_id": None, "assistant_line": None},
+    {"id": 44, "key_prefix": None, "is_active": True, "agent_id": None, "assistant_line": None},
 ]
 
 
@@ -67,7 +67,7 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == "/v1/relay/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
-            return self._send(200, {"id": 99, "token": "tok_stub", "scopes": ["chats:write", "relay:call"]})
+            return self._send(200, {"id": 99, "key_prefix": "minted99", "token": "plow_minted99_token", "scopes": ["chats:write", "relay:call"]})
         self._send(404, {"detail": self.path})
 
     def do_DELETE(self) -> None:  # noqa: N802
@@ -130,14 +130,31 @@ def main() -> int:
         # rotation, not a second agent -- key 22 is `local 22` on that line and
         # must not refuse itself.
         with open(os.path.join(work, "plow-credentials"), "w") as handle:
-            handle.write("# plow-agents-key-id: 22\nPLOW_API_BASE=x\nPLOW_AGENT_TOKEN=y\n")
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
         rotated = run("mint", LOCAL, cwd=work, base=base, token=token)
         check("rotating over this file's own key is not a conflict", rotated.returncode, 0)
         check("and the key it replaced was revoked", "22" in Stub.revoked, True)
 
+        before = list(Stub.revoked)
+        cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
+        check("revoke refuses a cloud-held line", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr and Stub.revoked == before, True)
+
+        KEYS.append({"id": 23, "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")})
+        ambiguous = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        KEYS.pop()
+        check("revoke refuses ambiguous local holders", ambiguous.returncode != 0 and "2 active holders" in ambiguous.stderr and Stub.revoked == before, True)
+
+        with open(os.path.join(work, "plow-credentials"), "w") as handle:
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_cloud111_token\n")
         recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
         check("revoke can recover the local key holding a line", recovered.returncode, 0)
         check("and revoked that local key", Stub.revoked[-1], "22")
+        check("and preserves a file naming a different key", os.path.exists(os.path.join(work, "plow-credentials")) and "names key 11" in recovered.stderr, True)
+
+        with open(os.path.join(work, "plow-credentials"), "w") as handle:
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
+        matching = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        check("line revoke removes a file naming the revoked key", matching.returncode == 0 and not os.path.exists(os.path.join(work, "plow-credentials")), True)
 
         Stub.chats = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
@@ -145,7 +162,7 @@ def main() -> int:
 
         credential = os.path.join(work, "plow-credentials")
         with open(credential, "w") as handle:
-            handle.write("# plow-agents-key-id: 42\nPLOW_API_BASE=x\nPLOW_AGENT_TOKEN=y\n")
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
         fake_bin = os.path.join(work, "bin")
         os.mkdir(fake_bin)
         docker_called = os.path.join(work, "docker-called")
@@ -155,16 +172,17 @@ def main() -> int:
         os.chmod(docker, 0o755)
         revoked = run("revoke", cwd=work, base=base, token=token, env=dict(os.environ, PATH=fake_bin))
         check("revoke exits 0", revoked.returncode, 0)
-        check("the named key was revoked", Stub.revoked[-1], "42")
+        check("the matching key was revoked", Stub.revoked[-1], "22")
         check("the credential file was removed", os.path.exists(credential), False)
         check("docker was never invoked", os.path.exists(docker_called), False)
 
         with open(credential, "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=y\n")
-        malformed = run("revoke", cwd=work, base="http://127.0.0.1:9", token=token)
-        check("a credential without one key id is refused", malformed.returncode != 0, True)
-        check("the malformed credential remains", os.path.exists(credential), True)
-        check("the error points to the dashboard", "dashboard" in malformed.stderr, True)
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_nomatch0_token\n")
+        before = list(Stub.revoked)
+        unmatched = run("revoke", cwd=work, base=base, token=token)
+        check("a credential matching no key is refused", unmatched.returncode != 0 and "no key matches" in unmatched.stderr, True)
+        check("the unmatched credential remains", os.path.exists(credential), True)
+        check("and no key was revoked", Stub.revoked, before)
 
     server.shutdown()
     for failure in failures:
