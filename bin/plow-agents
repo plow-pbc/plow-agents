@@ -113,7 +113,7 @@ def read_key_id(path: str) -> str | None:
         return None
     ids = [line[len(KEY_ID_MARKER):].strip() for line in content.splitlines() if line.startswith(KEY_ID_MARKER)]
     if len(ids) != 1 or not ids[0].isdigit():
-        die(f"{path} does not name exactly one key id -- run `plow-agents revoke` first, or revoke it in the Plow dashboard and delete the file")
+        die(f"{path} does not name exactly one key id -- run `plow-agents revoke <line-uid>`, or revoke it in the Plow dashboard and delete the file")
     return ids[0]
 
 
@@ -289,13 +289,25 @@ def mint(args: argparse.Namespace) -> None:
 
 
 def revoke(args: argparse.Namespace) -> None:
-    """Revoke the agent credential named by the local credential file."""
+    """Revoke the credential file's key, or recover one local key by line."""
     path = os.path.abspath(CREDENTIAL_FILE)
-    key_id = read_key_id(path)
-    if key_id is None:
-        die(f"no credential file at {path}")
-    revoke_key(args, key_id, account_token(args))
+    account = account_token(args)
+    if args.line:
+        line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
+        holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=account)).get(line_uid, [])
+        if len(holders) != 1:
+            die(f"line:{line_uid} has {len(holders)} active holders -- expected exactly one local credential")
+        if not holders[0].startswith("local "):
+            die(f"line:{line_uid} is held by {holders[0]} -- delete that agent in Plow")
+        key_id = holders[0].removeprefix("local ")
+    else:
+        key_id = read_key_id(path)
+        if key_id is None:
+            die(f"no credential file at {path}")
+    revoke_key(args, key_id, account)
     log(f"Revoked key {key_id}.")
+    if args.line:
+        return
     try:
         os.unlink(path)
     except OSError as error:
@@ -321,7 +333,8 @@ def main() -> int:
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
-    it = verbs.add_parser("revoke", help="revoke the credential ./plow-credentials names and remove the file")
+    it = verbs.add_parser("revoke", help="revoke ./plow-credentials, or one local credential by line")
+    it.add_argument("line", nargs="?", help="line uid whose sole local credential should be revoked")
     it.set_defaults(run=revoke)
 
     args = parser.parse_args()

@@ -135,6 +135,10 @@ def main() -> int:
         check("rotating over this file's own key is not a conflict", rotated.returncode, 0)
         check("and the key it replaced was revoked", "22" in Stub.revoked, True)
 
+        recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        check("revoke can recover the local key holding a line", recovered.returncode, 0)
+        check("and revoked that local key", Stub.revoked[-1], "22")
+
         Stub.chats = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("an account with no line gets the activation command", "login --new-line" in empty.stderr, True)

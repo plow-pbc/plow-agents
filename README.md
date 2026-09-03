@@ -74,6 +74,10 @@ The line is now free for the next `mint`. The account token, local checkout,
 build cache, and chat history remain; the agent credential and local agent state
 do not.
 
+If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` revokes the one
+local credential holding that line. It refuses a cloud agent or an ambiguous
+set of holders.
+
 Mint before the first `docker compose up`. If Docker was started first, it
 created `./plow-credentials` as an empty directory; recover with: `docker compose down -v && rmdir plow-credentials`. Then mint.
 
