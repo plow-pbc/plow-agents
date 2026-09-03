@@ -118,7 +118,31 @@ def template_case() -> None:
     server.shutdown()
 
 
+def degraded_cases() -> None:
+    """Neither missing file nor missing docker may raise: the key is already gone."""
+    with tempfile.TemporaryDirectory() as empty:
+        standing = plow_agents.compose_down(empty)
+        check("a directory with no compose.yml is reported, not raised", isinstance(standing, str) and "compose.yml" in standing, True)
+        check("and the note carries the aimed recovery command", "--env-file" in (standing or "") and "-u COMPOSE_PROJECT_NAME" in (standing or ""), True)
+        check("and never the bare command the tool refuses to run", "docker compose down -v" not in (standing or "").replace(plow_agents.RECOVERY, ""), True)
+    # `docker` off PATH entirely: the subprocess raises, and compose_down owes
+    # the caller a note rather than a traceback on top of a revoked key.
+    with tempfile.TemporaryDirectory() as work:
+        with open(os.path.join(work, "compose.yml"), "w") as handle:
+            handle.write(TRIVIAL)
+        path = os.environ.get("PATH", "")
+        os.environ["PATH"] = os.path.join(work, "nothing-here")
+        try:
+            standing = plow_agents.compose_down(work)
+        except BaseException as error:  # noqa: BLE001 -- the point is that nothing escapes
+            standing = f"RAISED {error!r}"
+        finally:
+            os.environ["PATH"] = path
+        check("no docker on PATH is reported, not raised", isinstance(standing, str) and not standing.startswith("RAISED"), True)
+
+
 def main() -> int:
+    degraded_cases()
     if docker_alive():
         targeting_case()
     else:
