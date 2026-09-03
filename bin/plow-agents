@@ -99,7 +99,7 @@ def write_private(path: str, body: str) -> str:
     return destination
 
 
-def credential_key_id(path: str, keys: object) -> str | None:
+def credential_key_id(path: str, keys: object, *, tolerate_unmatched: bool = False) -> str | None:
     """Find the one API key whose published prefix matches this credential."""
     try:
         with open(path) as handle:
@@ -107,11 +107,25 @@ def credential_key_id(path: str, keys: object) -> str | None:
     except OSError:
         return None
     tokens = [line.split("=", 1)[1] for line in content.splitlines() if line.startswith("PLOW_AGENT_TOKEN=")]
-    prefix = tokens[0][5:13] if len(tokens) == 1 and tokens[0].startswith("plow_") else ""
-    matches = [str(key["id"]) for key in (keys if isinstance(keys, list) else []) if key.get("key_prefix") is not None and key["key_prefix"] == prefix]
+    token = tokens[0] if len(tokens) == 1 and tokens[0].startswith("plow_") else ""
+    prefix = token[5:13]
+    if not prefix:
+        if tolerate_unmatched:
+            return ""
+        die(f"no valid agent token in {path} -- revoke it in the Plow dashboard and delete the file")
+    # Plow auth.py derives KeyInfo.key_prefix from the same slice of the token.
+    matches = [
+        str(key["id"])
+        for key in (keys if isinstance(keys, list) else [])
+        if (key_prefix := key.get("key_prefix")) and token[5:5 + len(key_prefix)] == key_prefix
+    ]
     if not matches:
-        die(f"no key matches the token in {path}")
+        if tolerate_unmatched:
+            return ""
+        die(f"no key matches the token in {path} -- revoke it in the Plow dashboard and delete the file")
     if len(matches) > 1:
+        if tolerate_unmatched:
+            return ""
         die(f"more than one key matches the token in {path}")
     return matches[0]
 
@@ -168,8 +182,8 @@ def account_lines(chats: object) -> dict[str, tuple[str, str]]:
     return seen
 
 
-def line_holders(keys: object) -> dict[str, list[str]]:
-    """Who is already answering on each line, uid -> ["cloud <uid>", "local <id>"].
+def line_holders(keys: object) -> dict[str, list[tuple[str, str]]]:
+    """Who is already answering on each line, uid -> [(kind, id)].
 
     One call answers it. A key carries both the line its grant resolves to and
     the cloud agent it belongs to, so a cloud agent needs no second lookup --
@@ -180,14 +194,20 @@ def line_holders(keys: object) -> dict[str, list[str]]:
     That is the question being asked: not who *could* write to the line, but who
     is an assistant on it.
     """
-    holders: dict[str, list[str]] = {}
+    holders: dict[str, list[tuple[str, str]]] = {}
     for key in keys if isinstance(keys, list) else []:
         line = key.get("assistant_line") or {}
         if not line.get("uid") or not key.get("is_active"):
             continue
         agent_uid = key.get("agent_id")
-        holders.setdefault(line["uid"], []).append(f"cloud {agent_uid}" if agent_uid else f"local {key['id']}")
+        holders.setdefault(line["uid"], []).append(
+            ("cloud", str(agent_uid)) if agent_uid else ("local", str(key["id"]))
+        )
     return holders
+
+
+def format_holder(holder: tuple[str, str]) -> str:
+    return f"{holder[0]} {holder[1]}"
 
 
 def login(args: argparse.Namespace) -> None:
@@ -238,11 +258,12 @@ def lines(args: argparse.Namespace) -> None:
     holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
     print("LINE\tNAME\tNUMBER\tSTATUS")
     for uid, (name, number) in sorted(seen.items()):
-        print(f"{uid}\t{name}\t{number}\t{', '.join(holders.get(uid, [])) or 'free'}")
+        status = ", ".join(format_holder(holder) for holder in holders.get(uid, [])) or "free"
+        print(f"{uid}\t{name}\t{number}\t{status}")
 
 
 def mint(args: argparse.Namespace) -> None:
-    line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
+    line_uid = args.line
     destination = os.path.abspath(CREDENTIAL_FILE)
     if os.path.isdir(destination):
         die(
@@ -260,9 +281,10 @@ def mint(args: argparse.Namespace) -> None:
     # below, which would otherwise retire a working credential on the way to a
     # refusal. The key this file already names is not a conflict: re-minting
     # over it is the ordinary rotation, and it is retired two lines down.
-    held = [who for who in line_holders(keys).get(line_uid, []) if who != f"local {superseded}"]
+    held = [holder for holder in line_holders(keys).get(line_uid, []) if holder != ("local", superseded)]
     if held:
-        die(f"line:{line_uid} is already answering as {', '.join(held)} -- revoke that one first")
+        names = ", ".join(format_holder(holder) for holder in held)
+        die(f"line:{line_uid} is already answering as {names} -- revoke that one first")
     if superseded is not None:
         revoke_key(args, superseded, account)
         log(f"Revoked key {superseded}, the one {destination} named.")
@@ -291,13 +313,13 @@ def revoke(args: argparse.Namespace) -> None:
     account = account_token(args)
     keys = call("GET", args.api_base, "/v1/api-keys", token=account)
     if args.line:
-        line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
+        line_uid = args.line
         holders = line_holders(keys).get(line_uid, [])
         if len(holders) != 1:
             die(f"line:{line_uid} has {len(holders)} active holders -- expected exactly one local credential")
-        if not holders[0].startswith("local "):
-            die(f"line:{line_uid} is held by {holders[0]} -- delete that agent in Plow")
-        key_id = holders[0].removeprefix("local ")
+        kind, key_id = holders[0]
+        if kind != "local":
+            die(f"line:{line_uid} is held by {format_holder(holders[0])} -- delete that agent in Plow")
     else:
         key_id = credential_key_id(path, keys)
         if key_id is None:
@@ -305,8 +327,11 @@ def revoke(args: argparse.Namespace) -> None:
     revoke_key(args, key_id, account)
     log(f"Revoked key {key_id}.")
     if args.line:
-        file_key_id = credential_key_id(path, keys)
+        file_key_id = credential_key_id(path, keys, tolerate_unmatched=True)
         if file_key_id is None:
+            return
+        if not file_key_id:
+            log(f"Left {path} in place: its token does not identify one key.")
             return
         if file_key_id != key_id:
             log(f"Left {path} in place: it names key {file_key_id}, not the revoked key {key_id}.")

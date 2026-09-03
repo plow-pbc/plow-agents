@@ -1,23 +1,13 @@
-# Minimal example for an agent repository. Copy it there and adapt as needed.
-
 services:
   agent:
     build: .
     volumes:
-      # `plow-agents mint` writes this before the first `docker compose up`.
-      - ./plow-credentials:/var/lib/plow/credentials.host:ro
-      # Home survives a restart. `docker compose down -v` resets it so a rebuilt
-      # image's files are visible; override the path only for a compatible image.
-      - agent-home:${PLOW_AGENT_HOME:-/var/lib/hermes}
-    environment:
-      HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
-      HERMES_MODEL: ${HERMES_MODEL:-}
-    env_file:
-      - path: .env
-        required: false
-    restart: unless-stopped
-    # The agent's supervisor allows 30s to checkpoint and release its lease.
-    stop_grace_period: 35s
+      - ./plow-credentials:/var/lib/plow/credentials:ro
+      # The agent's home, kept across `up`/`down` so its sessions and setup
+      # survive. It also shadows the image, so an edit to SOUL.md or a skill
+      # is only picked up once it is gone: `docker compose down -v` starts
+      # this agent fresh, and `down -v && up --build -d` is one edit round.
+      - agent-home:/var/lib/hermes
     # No ports: the agent connects to Plow outbound.
 
 volumes:

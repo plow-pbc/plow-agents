@@ -30,7 +30,7 @@ CHATS = {"data": [{"participants": [{"type": "agent", "line": line(uid, name)}]}
 
 KEYS = [
     # The cloud agent's credential: a line, and an agent_id naming its agent.
-    {"id": 11, "key_prefix": "cloud111", "is_active": True, "agent_id": "agt_7f3", "assistant_line": line(CLOUD, "Cloud")},
+    {"id": 11, "key_prefix": "cloud11", "is_active": True, "agent_id": "agt_7f3", "assistant_line": line(CLOUD, "Cloud")},
     # A self-hosted one: the same shape, no agent behind it.
     {"id": 22, "key_prefix": "local222", "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")},
     # Revoked, on the line that must still read `free`.
@@ -38,6 +38,8 @@ KEYS = [
     # This tool's own account key: account-wide, so it resolves to no line and
     # must not make every line look taken.
     {"id": 44, "key_prefix": None, "is_active": True, "agent_id": None, "assistant_line": None},
+    # An unparseable credential must not match an empty published prefix.
+    {"id": 7, "key_prefix": "", "is_active": True, "agent_id": None, "assistant_line": None},
 ]
 
 
@@ -108,12 +110,26 @@ def main() -> int:
         check("a cloud agent's line names its agent", rows.get(CLOUD), "cloud agt_7f3")
         check("a self-hosted agent's line names its key", rows.get(LOCAL), "local 22")
 
+        legacy = run("revoke", f"line:{LOCAL}", cwd=work, base=base, token=token)
+        check("legacy line-prefixed input is not normalized", legacy.returncode != 0 and "0 active holders" in legacy.stderr, True)
+
         os.mkdir(os.path.join(work, "plow-credentials"))
         directory = run("mint", FREE, cwd=work, base=base, token=token)
         check("mint refuses a credential directory", directory.returncode, 1)
         check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
         check("and sends no POST", Stub.posts, [])
         os.rmdir(os.path.join(work, "plow-credentials"))
+
+        credential = os.path.join(work, "plow-credentials")
+        with open(credential, "w") as handle:
+            handle.write("PLOW_API_BASE=x\n")
+        before_posts = list(Stub.posts)
+        before_revoked = list(Stub.revoked)
+        malformed_mint = run("mint", FREE, cwd=work, base=base, token=token)
+        check("mint refuses an unparseable credential", malformed_mint.returncode != 0 and "no valid agent token" in malformed_mint.stderr, True)
+        check("and sends no mint POST", Stub.posts, before_posts)
+        check("and revokes no empty-prefix key", Stub.revoked, before_revoked)
+        os.unlink(credential)
 
         refused = run("mint", CLOUD, cwd=work, base=base, token=token)
         check("mint refuses an occupied line", refused.returncode, 1)
@@ -152,6 +168,11 @@ def main() -> int:
         check("and preserves a file naming a different key", os.path.exists(os.path.join(work, "plow-credentials")) and "names key 11" in recovered.stderr, True)
 
         with open(os.path.join(work, "plow-credentials"), "w") as handle:
+            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_nomatch0_token\n")
+        unmatched_file = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        check("line revoke tolerates an unmatched credential file", unmatched_file.returncode == 0 and os.path.exists(os.path.join(work, "plow-credentials")) and "does not identify one key" in unmatched_file.stderr, True)
+
+        with open(os.path.join(work, "plow-credentials"), "w") as handle:
             handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
         matching = run("revoke", LOCAL, cwd=work, base=base, token=token)
         check("line revoke removes a file naming the revoked key", matching.returncode == 0 and not os.path.exists(os.path.join(work, "plow-credentials")), True)
@@ -160,7 +181,6 @@ def main() -> int:
         empty = run("lines", cwd=work, base=base, token=token)
         check("an account with no line gets the activation command", "login --new-line" in empty.stderr, True)
 
-        credential = os.path.join(work, "plow-credentials")
         with open(credential, "w") as handle:
             handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
         fake_bin = os.path.join(work, "bin")
@@ -183,6 +203,14 @@ def main() -> int:
         check("a credential matching no key is refused", unmatched.returncode != 0 and "no key matches" in unmatched.stderr, True)
         check("the unmatched credential remains", os.path.exists(credential), True)
         check("and no key was revoked", Stub.revoked, before)
+
+        with open(credential, "w") as handle:
+            handle.write("PLOW_API_BASE=x\n")
+        before = list(Stub.revoked)
+        unparseable = run("revoke", cwd=work, base=base, token=token)
+        check("an unparseable credential cannot match an empty prefix", unparseable.returncode != 0 and "no valid agent token" in unparseable.stderr, True)
+        check("the unparseable credential remains", os.path.exists(credential), True)
+        check("and the empty-prefix key was not revoked", Stub.revoked, before)
 
     server.shutdown()
     for failure in failures:
