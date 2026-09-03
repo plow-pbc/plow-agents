@@ -1,11 +1,9 @@
-# Build and run a Plow agent on this machine, with no inbound ports.
+# Minimal example for an agent repository. Copy it there and adapt as needed.
 name: plow-agent
 
 services:
   agent:
-    build:
-      # An absolute local checkout, or a git URL with a #ref.
-      context: ${PLOW_AGENT_REPO:-https://github.com/plow-pbc/plow-hermes-agent.git#main}
+    build: .
     volumes:
       # `plow-agents mint` writes this before the first `docker compose up`.
       - ./plow-credentials:/var/lib/plow/credentials.host:ro

@@ -2,24 +2,24 @@
 
 Build a Plow agent from a local checkout, run it in Docker, and give it a real
 Plow line. The agent opens an outbound connection to Plow; Compose publishes no
-ports. This repository is one stdlib-only Python CLI plus `compose.yml`.
+ports. This repository is one stdlib-only Python CLI plus a minimal
+`compose.yml` example for new agents.
 
 ## Develop an agent locally
 
-Keep the agent checkout beside this one, then run these commands from the
-`plow-agents` directory. `PLOW_AGENT_REPO` must be an absolute path: Compose
-resolves relative paths from the project directory, not from the shell that set
-the variable.
+Each agent repository owns its `compose.yml`. Put `plow-agents/bin` on `PATH`,
+then run the whole loop from the agent checkout so the credential and Compose
+project stay together.
 
 ```sh
-cd /path/to/plow-agents
+export PATH="/path/to/plow-agents/bin:$PATH"
+cd /path/to/your-agent
 
 # Once on this machine. Add --new-line if this account needs an assistant line.
-bin/plow-agents login
+plow-agents login
 
-export PLOW_AGENT_REPO="$(cd ../life-assistant-hermes-agent && pwd)"
-bin/plow-agents lines
-bin/plow-agents mint ln_xxx       # before the first `up`
+plow-agents lines
+plow-agents mint ln_xxx           # before the first `up`
 docker compose up --build -d
 docker compose logs -f agent
 ```
@@ -64,7 +64,7 @@ When the development session is over, revoke the credential first and let
 Compose remove the container, network, and home volume:
 
 ```sh
-bin/plow-agents revoke
+plow-agents revoke
 docker compose down -v
 ```
 
@@ -78,9 +78,10 @@ created `./plow-credentials` as an empty directory; recover with: `docker compos
 ## Credentials and authority
 
 The account token stays on the host and lets this CLI list lines, mint, and
-revoke. `mint` writes a mode-600 `./plow-credentials`, which is ignored by Git
-and mounted read-only into the container. Re-minting over that file rotates its
-old key rather than leaving a live credential behind.
+revoke. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
+Compose file to mount read-only. Add `/plow-credentials` to that repo's
+`.gitignore`. Re-minting over the file rotates its old key rather than leaving
+a live credential behind.
 
 An agent credential is restricted to the chosen line, but it has the same role
 as a hosted Plow agent: that line's chats, Plow inference, `relay:call`, and
@@ -90,13 +91,9 @@ only code you trust with both.
 
 ## Configuration escape hatches
 
-The default source is
-`https://github.com/plow-pbc/plow-hermes-agent.git#main`; setting the absolute
-`PLOW_AGENT_REPO` above selects a local checkout, including uncommitted changes.
-`PLOW_AGENT_HOME` changes the home path only for an image that uses a different
-one. Inference defaults to Plow. A compatible image can read
-`HERMES_PROVIDER`, `HERMES_MODEL`, and its provider key from `.env` beside
-`compose.yml`.
+The included `compose.yml` is a minimal `build: .` example, not the runtime
+configuration for every agent. Copy it when starting an agent repository; that
+repository then owns its build, environment, mounts, and project name.
 
 Most developers do not need the remaining CLI flags:
 
