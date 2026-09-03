@@ -19,6 +19,7 @@ services:
     restart: unless-stopped
     # The agent's supervisor allows 30s to checkpoint and release its lease.
     stop_grace_period: 35s
+    # No ports: the agent connects to Plow outbound.
 
 volumes:
   agent-home:

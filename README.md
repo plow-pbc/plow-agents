@@ -84,7 +84,8 @@ The account token stays on the host and lets this CLI list lines, mint, and
 revoke. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` and `/.env` to that
 repo's `.gitignore`. Re-minting over the file rotates its old key rather than
-leaving a live credential behind.
+leaving a live credential behind. `plow-credentials.example` shows the file's
+shape with placeholder values.
 
 An agent credential is restricted to the chosen line, but it has the same role
 as a hosted Plow agent: that line's chats, Plow inference, `relay:call`, and
@@ -98,6 +99,7 @@ The included `compose.example.yml` is a minimal `build: .` example, not the
 runtime configuration for this repository or every agent. Copy it when starting
 an agent repository; that repository then owns its build, environment, mounts,
 and project name.
+
 Inference defaults to Plow; set `HERMES_PROVIDER` and `HERMES_MODEL` in `.env`
 beside `compose.yml` according to the agent image's provider documentation.
 
