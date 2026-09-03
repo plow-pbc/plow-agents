@@ -5,7 +5,7 @@
     plow-agents login --new-line same, and be given an assistant line
     plow-agents lines            the assistant lines this account holds
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
-    plow-agents revoke           revoke the credential ./plow-credentials names
+    plow-agents revoke           revoke that credential and tear the agent down
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
 revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
@@ -18,7 +18,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -31,6 +33,9 @@ DEFAULT_OUT = "plow-credentials"
 # The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
 # NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
 KEY_ID_MARKER = "# plow-agents-key-id: "
+# What `docker compose` itself looks for, in its own precedence order. A
+# directory with none of these has no project here to tear down.
+COMPOSE_FILES = ("compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml")
 POLL_S = 3
 TIMEOUT_S = 900
 
@@ -250,7 +255,38 @@ def mint(args: argparse.Namespace) -> None:
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
+def compose_down(directory: str) -> None:
+    """`docker compose down -v` here: the container and the agent's home volume.
+
+    Nothing about this may gate the revoke above, which is why it runs last and
+    why an absent compose file or an absent docker is a note rather than a
+    failure. Down is what the cloud's `destroy` is: a machine and its disk,
+    taken away from a credential that can no longer act either way.
+    """
+    if not any(os.path.exists(os.path.join(directory, name)) for name in COMPOSE_FILES):
+        log(f"No compose file in {directory}, so nothing was torn down here.")
+        log("Run `docker compose down -v` from the directory holding the agent's compose.yml to remove its container and home volume.")
+        return
+    if shutil.which("docker") is None:
+        log(f"No `docker` on PATH: the project in {directory} is untouched.")
+        log("Run `docker compose down -v` there to remove the container and the agent's home volume.")
+        return
+    log(f"Running `docker compose down -v` in {directory} ...")
+    if subprocess.run(("docker", "compose", "down", "-v"), cwd=directory).returncode != 0:
+        # The credential is already gone, so the agent is inert whatever is left
+        # standing. Say what remains rather than pretending the delete finished.
+        die(f"`docker compose down -v` failed in {directory} -- the key is revoked and the agent cannot reach Plow, but its container or home volume may still exist. Run that command again there.")
+    log("Container and home volume removed.")
+
+
 def revoke(args: argparse.Namespace) -> None:
+    """The local equivalent of `DELETE /v1/agents/cloud/{id}`.
+
+    Same order and for the same reason: the credential goes first, before
+    anything that could fail is even looked at, so an agent whose deletion
+    errored is one that has already lost the ability to act. The chat on the
+    line is left alone here too -- it is the owner's, not the container's.
+    """
     path = os.path.abspath(args.out)
     key_id = read_key_id(path)
     if key_id is None:
@@ -258,7 +294,8 @@ def revoke(args: argparse.Namespace) -> None:
     revoke_key(args, key_id, account_token(args))
     os.unlink(path)
     log(f"Revoked key {key_id} and removed {path}.")
-    log("The agent it belonged to can no longer reach Plow. `docker compose down -v` removes its home.")
+    compose_down(os.getcwd())
+    log("The agent is gone. The chat on its line stays, with its history.")
 
 
 def main() -> int:
@@ -281,9 +318,10 @@ def main() -> int:
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
-    it = verbs.add_parser("revoke", help="revoke the credential ./plow-credentials names")
-    it.add_argument("--out", default=DEFAULT_OUT, help=f"the credential file to revoke and remove (default ./{DEFAULT_OUT})")
-    it.set_defaults(run=revoke)
+    for verb in ("revoke", "delete"):
+        it = verbs.add_parser(verb, help="revoke the credential ./plow-credentials names and tear the agent down")
+        it.add_argument("--out", default=DEFAULT_OUT, help=f"the credential file to revoke and remove (default ./{DEFAULT_OUT})")
+        it.set_defaults(run=revoke)
 
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.

@@ -72,9 +72,23 @@ Then text the number the agent answers on and it replies; `docker compose logs -
 agent` is what it is doing. When you are done:
 
 ```sh
-bin/plow-agents revoke         # revokes the key, deletes ./plow-credentials
-docker compose down -v         # deletes the agent's home volume
+bin/plow-agents revoke         # revokes the key and tears the container down
 ```
+
+## Deleting an agent
+
+`revoke` -- `delete` is the same verb -- is the whole of removing one, and it is
+the same delete a hosted agent gets from `DELETE /v1/agents/cloud/{id}`: the
+credential is revoked, which deactivates the relay device that credential
+carries, and then the container and its home volume are removed. The order is
+the cloud's order and for the cloud's reason: the credential goes first, before
+anything that can fail is even looked at, so an agent whose teardown errored has
+already lost the ability to act. The teardown is `docker compose down -v` in the
+directory you run it from, which is where a container the credential belonged to
+would be; a directory with no compose file gets a note saying so rather than an
+error, because the credential is dead either way. What is *not* deleted, here as
+in the cloud, is the chat on the line: it and its history are the owner's, and
+they stay.
 
 ## The credential file
 
@@ -149,8 +163,7 @@ plow-agents lines            # pick a line
 plow-agents mint <line-uid>  # writes ./plow-credentials (mode 600)
 docker compose up -d         # no --build: the image is already chosen
 docker compose logs -f agent # `plow-init: configured ... as cht_...` = the right line
-plow-agents revoke           # when done
-docker compose down -v
+plow-agents revoke           # when done: revokes the key, then `down -v` here
 ```
 
 Text the line and it answers; there is no "listening" line to wait for. The
