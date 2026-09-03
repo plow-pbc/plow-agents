@@ -3,8 +3,8 @@
 Run a Plow agent on your own machine, and manage the credentials it needs. A Plow
 agent is a container that talks to its owner through Plow Chat and nothing else:
 no ports, no inbound listener. This repository is `compose.yml` plus one stdlib
-Python script, and no agent of its own — the image says which agent you get, and
-any image meeting the contract works.
+Python script, and no agent of its own: `compose.yml` builds the agent from its
+own source repository, so there is nothing to pull and no registry to log into.
 
 ## The two credentials
 
@@ -26,36 +26,23 @@ token. Every later `login` just refreshes that token.
 bin/plow-agents login --new-line   # a brand-new account: get a line too
 bin/plow-agents login              # thereafter; prints a code, text it
 bin/plow-agents lines          # ln_xxx   +1 555 0100
-bin/plow-agents mint ln_xxx    # writes ./plow-credentials and ./.env
-docker compose up -d
+bin/plow-agents mint ln_xxx    # writes ./plow-credentials
+docker compose up --build
 ```
 
-`mint` needs a Plow whose provider catalog publishes images, not just provider
-names: an older one that answers `/v1/agents/cloud/providers` with a bare list of
-names cannot say what to run, and `mint` stops with that error. Setting
-`PLOW_AGENT_IMAGE` yourself bypasses the catalog entirely and `mint` works
-against such a Plow — see below.
-
-`mint` also asks Plow which image runs the agent you named — `--provider hermes`
-by default — and writes it to `.env` as `PLOW_AGENT_IMAGE`, where `compose.yml`
-reads it. No image is named in this repository on purpose: a tag here would
-quietly fall behind the one your Plow boots. They are `amd64` only today, so an
-Apple Silicon Mac emulates.
-
-To run an image Plow does not publish — one you built locally, say — set
-`PLOW_AGENT_IMAGE` in `.env` (or in the environment) yourself: `mint` finds it
-already chosen, keeps it, and does not read the provider catalog at all. Since
-`mint` writes that line itself, the pin persists across mints: omit `--provider`
-to keep running the pinned image, and pass it to go back to the catalog and
-refresh.
+`docker compose up --build` is the whole of running one. The first build clones
+the agent's source and builds it for this machine's own architecture, which takes
+a few minutes; later ones reuse the layers. `PLOW_AGENT_REPO` is what to build —
+a git URL with a `#ref`, or a local directory — and it defaults to
+`https://github.com/plow-pbc/plow-hermes-agent.git#main`.
 
 Minting again over an existing `./plow-credentials` revokes the key that file
 names before it writes the new one, so rotation never leaves a live token nobody
 holds a file for. A credential file `mint` cannot read a key id out of stops the
 run instead — revoke that one first.
 
-Both files land relative to the directory you run `mint` from — the one holding
-`compose.yml` — and it prints their absolute paths. `--out` puts the credential
+The credential lands relative to the directory you run `mint` from — the one
+holding `compose.yml` — and it prints its absolute path. `--out` puts the credential
 elsewhere, and then the mount in `compose.yml` has to name that path too.
 `--api-base` is the root *this tool* calls, without `/v1`; `--agent-api-base`
 is the one written into the credential for the *container* to call, and defaults
@@ -106,7 +93,5 @@ back needs both lines: a model id belongs to the provider it was written for.
 
 ```sh
 printf 'HERMES_PROVIDER=anthropic\nHERMES_MODEL=claude-sonnet-4-5\nANTHROPIC_API_KEY=sk-ant-…\n' >> .env
-docker compose up -d
+docker compose up --build -d
 ```
-
-`mint` rewrites only that file's `PLOW_AGENT_IMAGE` line, so what you add survives.

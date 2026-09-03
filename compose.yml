@@ -1,9 +1,10 @@
 # Running a Plow agent on your own machine.
 #
-# Any image meeting the Plow agent contract works here: it reads its credential
-# from /var/lib/plow/credentials, keeps everything it owns under
-# /var/lib/hermes, and boots its own `Cmd`. Nothing in this file names a
-# particular agent -- the image reference does that.
+# The agent is built here from its own source, so this file names a repository
+# rather than an image: no registry to be logged into, and nothing to pull that
+# you did not build. What it builds meets the Plow agent contract -- it reads
+# its credential from /var/lib/plow/credentials, keeps everything it owns under
+# /var/lib/hermes, and boots its own `Cmd`.
 #
 # It is the same file and the same boot a hosted agent gets, which is the point
 # of doing it this way: there is no local mode to diverge.
@@ -11,10 +12,14 @@ name: plow-agent
 
 services:
   agent:
-    # Written to `.env` by `plow-agents mint`: the image Plow itself would
-    # boot for the provider you chose. No default -- a tag written down here
-    # would drift from the one your Plow runs, and the drift would be silent.
-    image: ${PLOW_AGENT_IMAGE:?run `plow-agents mint` first -- it writes this to .env}
+    build:
+      # A git URL, so the build context is the repository at that ref and no
+      # clone is needed out here. `#main` is the ref: point PLOW_AGENT_REPO at
+      # a branch, a tag, or a local directory to build something else.
+      #
+      # The first build takes a few minutes. It builds for this machine's
+      # architecture, which is why it is a build and not a pull.
+      context: ${PLOW_AGENT_REPO:-https://github.com/plow-pbc/plow-hermes-agent.git#main}
     volumes:
       # The credential, and the whole of what the image is told: two lines,
       # written by `plow-agents mint`. See plow-credentials.example.
@@ -39,7 +44,7 @@ services:
       # because a model id belongs to the provider it was written for.
       HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
       HERMES_MODEL: ${HERMES_MODEL:-}
-    # PLOW_AGENT_IMAGE above, and anything the chosen inference provider reads
+    # PLOW_AGENT_REPO above, and anything the chosen inference provider reads
     # -- an API key, say. Never the credential above.
     env_file:
       - path: .env

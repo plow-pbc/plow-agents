@@ -4,7 +4,7 @@
     plow-agents login            one-time: text a code, get an account token
     plow-agents login --new-line same, and be given an assistant line
     plow-agents lines            the assistant lines this account holds
-    plow-agents mint <line-uid>  that line's credential -> ./plow-credentials, ./.env
+    plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
     plow-agents revoke           revoke the credential ./plow-credentials names
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
@@ -28,8 +28,6 @@ from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
 DEFAULT_OUT = "plow-credentials"
-DEFAULT_ENV_OUT = ".env"
-DEFAULT_PROVIDER = "hermes"
 # All an agent needs: talk in its chats, and reach Plow's inference.
 AGENT_SCOPES = ["chats:use", "llm:chat"]
 # The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
@@ -155,63 +153,6 @@ def account_token(args: argparse.Namespace) -> str:
     return token
 
 
-def env_image(path: str) -> str | None:
-    """PLOW_AGENT_IMAGE as `.env` already sets it, if it does. Read from the
-    bottom: that is the line compose would use when the name repeats."""
-    try:
-        with open(path) as handle:
-            content = handle.read()
-    except OSError:
-        return None
-    for line in reversed(content.splitlines()):
-        if line.startswith("PLOW_AGENT_IMAGE="):
-            return line[len("PLOW_AGENT_IMAGE="):].strip() or None
-    return None
-
-
-def provider_image(args: argparse.Namespace, token: str) -> tuple[str, str]:
-    """The image to run, and where it came from.
-
-    An image already chosen -- PLOW_AGENT_IMAGE in the environment or in `.env`
-    -- is the answer, and the catalog is not consulted: that is how you run an
-    image this Plow does not publish, and how `mint` keeps working on a Plow too
-    old to answer for one. `mint` writes that variable itself, though, so a
-    `--provider` you actually typed outranks it -- otherwise the first mint
-    would be the last one that could ever change agent. With neither, it is the
-    image Plow publishes for the default provider, which Plow ids as
-    `<backend>:<variant>` (`exe:hermes`); either spelling is accepted.
-    """
-    pinned = os.environ.get("PLOW_AGENT_IMAGE", "").strip() or env_image(os.path.abspath(args.env_out))
-    if pinned and args.provider is None:
-        return "PLOW_AGENT_IMAGE was already set, so the provider catalog was not read", pinned
-    args.provider = args.provider or DEFAULT_PROVIDER
-    catalog = call("GET", args.api_base, "/v1/agents/cloud/providers", token=token)
-    if not isinstance(catalog, list) or not catalog:
-        die("/v1/agents/cloud/providers answered no providers")
-    if not all(isinstance(entry, dict) for entry in catalog):
-        die("this Plow lists provider names but not their images -- it is too old for `mint`; set PLOW_AGENT_IMAGE in .env by hand")
-    for entry in catalog:
-        identifier = entry.get("id") or ""
-        if args.provider in (identifier, identifier.rpartition(":")[2]):
-            image = entry.get("image")
-            if not image:
-                die(f"provider {identifier} publishes no image")
-            return f"the image Plow publishes for {identifier}", image
-    offered = ", ".join(sorted(entry.get("id") or "?" for entry in catalog))
-    die(f"no provider {args.provider!r} on this Plow -- it offers {offered}")
-
-
-def write_env_image(path: str, image: str) -> str:
-    """Set PLOW_AGENT_IMAGE in `.env`, keeping the other lines: compose reads
-    this file, and your own provider and model settings live in it too."""
-    try:
-        with open(path) as handle:
-            kept = [line for line in handle.read().splitlines() if not line.startswith("PLOW_AGENT_IMAGE=")]
-    except OSError:
-        kept = []
-    return write_private(path, "\n".join([f"PLOW_AGENT_IMAGE={image}", *kept]) + "\n")
-
-
 # --- verbs -----------------------------------------------------------------
 
 
@@ -285,7 +226,6 @@ def mint(args: argparse.Namespace) -> None:
     # token no file on this machine names. So the old key goes first -- read
     # before anything can fail, revoked as late as possible before the new one.
     superseded = read_key_id(destination)
-    provider, image = provider_image(args, account)
     if superseded is not None:
         revoke_key(args, superseded, account)
         log(f"Revoked key {superseded}, the one {destination} named.")
@@ -302,11 +242,9 @@ def mint(args: argparse.Namespace) -> None:
         f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
     )
     written = write_private(destination, credential)
-    env = write_env_image(args.env_out, image)
     log(f"Minted key {key_id} for {grant}, scoped to {' '.join(AGENT_SCOPES)}.")
     log(f"Wrote {written} (mode 600).")
-    log(f"Wrote {env}: {image} -- {provider}.")
-    log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
+    log("`docker compose up --build -d` from the directory holding compose.yml boots the agent.")
 
 
 def revoke(args: argparse.Namespace) -> None:
@@ -337,9 +275,7 @@ def main() -> int:
     it.add_argument("line", help="line uid, as printed by `lines`")
     it.add_argument("--name", default="plow-agent", help="name recorded on the agent credential")
     it.add_argument("--out", default=DEFAULT_OUT, help=f"where to write it, relative to the current directory (default ./{DEFAULT_OUT})")
-    it.add_argument("--provider", default=None, help=f"which agent to run (default {DEFAULT_PROVIDER}, unless PLOW_AGENT_IMAGE already names an image)")
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
-    it.add_argument("--env-out", default=DEFAULT_ENV_OUT, help=f"where its image reference goes, for compose to read (default ./{DEFAULT_ENV_OUT})")
     it.set_defaults(run=mint)
 
     it = verbs.add_parser("revoke", help="revoke the credential ./plow-credentials names")
