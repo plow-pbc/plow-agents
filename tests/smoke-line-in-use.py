@@ -44,6 +44,7 @@ KEYS = [
 
 
 class Stub(BaseHTTPRequestHandler):
+    chats: dict = CHATS
     minted: list[dict] = []
     revoked: list[str] = []
 
@@ -57,7 +58,7 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
         if self.path == "/v1/chats":
-            return self._send(200, CHATS)
+            return self._send(200, Stub.chats)
         if self.path == "/v1/api-keys":
             return self._send(200, KEYS)
         self._send(404, {"detail": self.path})
@@ -115,6 +116,7 @@ def main() -> int:
         forced = run("mint", CLOUD, "--force", cwd=work, base=base, token=token)
         check("--force mints anyway", forced.returncode, 0)
         check("and writes the credential", os.path.exists(os.path.join(work, "plow-credentials")), True)
+        check("mint does not prescribe a Compose command", "docker compose" in forced.stderr, False)
 
         free = run("mint", FREE, cwd=work, base=base, token=token)
         check("a free line mints without --force", free.returncode, 0)
@@ -127,6 +129,10 @@ def main() -> int:
         rotated = run("mint", LOCAL, cwd=work, base=base, token=token)
         check("rotating over this file's own key is not a conflict", rotated.returncode, 0)
         check("and the key it replaced was revoked", "22" in Stub.revoked, True)
+
+        Stub.chats = {"data": []}
+        empty = run("lines", cwd=work, base=base, token=token)
+        check("an account with no line gets the activation command", "login --new-line" in empty.stderr, True)
 
     server.shutdown()
     for failure in failures:

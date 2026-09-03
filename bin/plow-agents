@@ -234,7 +234,7 @@ def lines(args: argparse.Namespace) -> None:
     seen = account_lines(call("GET", args.api_base, "/v1/chats", token=token))
     if not seen:
         log("No assistant lines on this account yet.")
-        log("A line arrives with your first chat; text your Plow number to be given one.")
+        log("Run `plow-agents login --new-line` to be given one.")
         return
     holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
     for uid, (name, number) in sorted(seen.items()):
@@ -280,7 +280,6 @@ def mint(args: argparse.Namespace) -> None:
     written = write_private(destination, credential)
     log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
     log(f"Wrote {written} (mode 600).")
-    log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
 def revoke(args: argparse.Namespace) -> None:
