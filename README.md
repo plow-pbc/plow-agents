@@ -40,6 +40,8 @@ bin/plow-agents login --new-line   # a brand-new account: get a line too
 bin/plow-agents login              # thereafter; prints a code, text it
 bin/plow-agents lines          # ln_xxx   Ada   +1 555 0100   free
 bin/plow-agents mint ln_xxx    # writes ./plow-credentials
+export ANTHROPIC_API_KEY=sk-ant-…             # your own provider key
+bin/plow-agents provider anthropic <model>    # writes ./.env
 docker compose up --build
 ```
 
@@ -139,14 +141,73 @@ variable, not by editing `compose.yml`.
 ## Where inference goes
 
 Not the agent's identity but a decision about this container, so it goes in
-`.env` beside `compose.yml`. The names belong to the image; Plow's own agents are
-built on Hermes. `HERMES_MODEL` is not optional when switching, and switching
-back needs both lines: a model id belongs to the provider it was written for.
+`.env` beside `compose.yml`, and `provider` is what writes it:
 
 ```sh
-printf 'HERMES_PROVIDER=anthropic\nHERMES_MODEL=claude-sonnet-4-5\nANTHROPIC_API_KEY=sk-ant-…\n' >> .env
-docker compose up --build -d
+export ANTHROPIC_API_KEY=sk-ant-…
+bin/plow-agents provider anthropic <model>
+docker compose up -d
 ```
+
+The key is read from the **environment** and written to the file. Both halves
+of that matter. Read from the environment, because a key passed as an argument
+is in your shell history and in this process's command line. Written to a file,
+because an exported variable does not reach the container: `compose.yml` passes
+`HERMES_PROVIDER` and `HERMES_MODEL` and nothing else, and `env_file` is how
+anything else gets in. `export ANTHROPIC_API_KEY=… && docker compose up -d` is
+the natural move and it does not work — you get a container that boots, greets
+its owner, and answers every message with "⚠️ Provider authentication failed."
+
+`--key-env` names the variable when the guess (`<NAME>_API_KEY`) is wrong.
+`provider` on its own prints what the file says, with the key's length in place
+of the key. `provider --unset` takes the settings back out.
+
+**The model id is the provider's, not this tool's.** Ask the provider what it
+has — `curl -s https://api.anthropic.com/v1/models -H "x-api-key: $ANTHROPIC_API_KEY"
+-H 'anthropic-version: 2023-06-01'` — rather than copying an id out of a README,
+which is a thing that ages into a container that boots and cannot answer. The
+provider and the model always move together, both ways: a model id belongs to
+the provider it was written for, so setting one without the other, or removing
+one and leaving the other, is a broken agent rather than a half-configured one.
+`provider` and `provider --unset` write and remove both.
+
+`.env` is gitignored, it is a host file so it survives `docker compose restart`
+and `up`, and rotating the key is editing that one line and `docker compose up
+-d`. Two places that look like they would work and do not:
+
+- **The agent's own dotenv, `$HERMES_HOME/.env` inside the container.** It is
+  rewritten from scratch on every boot and ends up holding one name. A key put
+  there is gone at the next restart, with nothing said about it.
+- **A key only in your shell.** See above.
+
+And one to know rather than avoid: `docker compose config` renders `env_file`
+into the resolved `environment:` block, so it prints the key in full. It is the
+usual way to check a compose file and it is also the usual way a key ends up in
+a scrollback or a pasted ticket.
+
+### After the first boot
+
+The image ships the Hermes CLI, and `hermes auth` is a real store — it keeps the
+secret in `auth.json` in the home volume, where nothing on this machine and
+nothing in the repo can see it:
+
+```sh
+docker compose exec -u hermes agent /opt/hermes/.venv/bin/hermes auth add anthropic --type api-key
+```
+
+`-u hermes` is not optional: `exec` lands you as root, and root writing into the
+agent's home leaves it files it cannot manage. A key added this way survives
+`docker compose restart` and lets you drop the key line from `.env` — keep the
+`HERMES_PROVIDER` and `HERMES_MODEL` lines, which is where the choice still
+lives. It does **not** survive `docker compose down -v`, which is what `revoke`
+runs, and it cannot help the first boot, because there is no container to add it
+to yet.
+
+What `hermes` cannot do is choose the provider. `hermes model` and `hermes
+config set model.provider` write `config.yaml`, and the image rewrites that
+block from `HERMES_PROVIDER` on every boot — so a provider picked inside the
+container is silently back to the file's answer after one restart. The choice is
+`.env`'s; only the secret can move.
 
 ## Test a new image
 

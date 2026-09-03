@@ -6,6 +6,8 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
+    plow-agents provider <name> <model>
+                                 where inference goes -> ./.env
     plow-agents revoke           revoke that credential and tear the agent down
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
@@ -19,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -30,6 +33,15 @@ from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
 DEFAULT_OUT = "plow-credentials"
+# Read by `compose.yml`'s `env_file`, and gitignored. The three names below are
+# the only ones this tool owns in it; anything else you keep there is left
+# exactly where it is.
+DEFAULT_ENV = ".env"
+PROVIDER_KEYS = ("HERMES_PROVIDER", "HERMES_MODEL")
+# Which variable holds the key, recorded the way `mint` records its key id: a
+# comment, because the name is this tool's bookkeeping and not a setting. It is
+# what lets `--unset` remove the right line instead of guessing at a spelling.
+KEY_ENV_MARKER = "# plow-agents-key-env: "
 # The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
 # NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
 KEY_ID_MARKER = "# plow-agents-key-id: "
@@ -301,6 +313,82 @@ def mint(args: argparse.Namespace) -> None:
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
+def key_env_for(name: str) -> str:
+    """The variable a provider reads its key from, by convention.
+
+    Hermes asks each provider profile; this tool cannot, so it guesses the
+    common spelling and takes `--key-env` when the guess is wrong. Getting it
+    wrong is not silent: the container refuses to answer, having no key.
+    """
+    return re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_") + "_API_KEY"
+
+
+def read_env(path: str) -> list[str]:
+    try:
+        with open(path) as handle:
+            return handle.read().splitlines()
+    except OSError:
+        return []
+
+
+def provider(args: argparse.Namespace) -> None:
+    """Write where inference goes, and the key it needs, into `.env`.
+
+    The secret is taken from the environment rather than from an argument, so
+    it does not land in shell history or in this process's command line. And it
+    is written to a file rather than left exported, because an exported
+    variable does not reach the container: `compose.yml` passes
+    `HERMES_PROVIDER` and `HERMES_MODEL` and nothing else, so a key that is
+    merely in your shell produces a container that boots, greets its owner and
+    then fails every turn.
+
+    Provider and model move together, both ways. A model id belongs to the
+    provider it was written for, so `--unset` removes both rather than leaving
+    a model behind that the next provider does not have.
+
+    Every line this tool did not write is kept, in place. The file is Compose's
+    as much as it is this tool's -- `PLOW_AGENT_REPO` lives here too.
+    """
+    destination = os.path.abspath(args.out)
+    lines = read_env(destination)
+    settings = {name: value for name, value in (line.split("=", 1) for line in lines if "=" in line and not line.startswith("#"))}
+    recorded = [line[len(KEY_ENV_MARKER):].strip() for line in lines if line.startswith(KEY_ENV_MARKER)]
+
+    if not args.name and not args.unset:
+        if not any(name in settings for name in PROVIDER_KEYS):
+            log(f"{destination} names no provider -- the container boots on the image's default, which is Plow's own inference.")
+            return
+        for name in PROVIDER_KEYS:
+            log(f"{name}={settings.get(name, '')}")
+        for name in recorded:
+            log(f"{name}=<set, {len(settings[name])} characters>" if name in settings else f"{name}=<missing>")
+        return
+
+    # The names this tool owns: the two settings, whatever key variable it
+    # recorded last time, and -- when setting -- the one it is about to record.
+    owned = set(PROVIDER_KEYS) | set(recorded)
+    key_env = (args.key_env or key_env_for(args.name)) if args.name else None
+    if key_env:
+        owned.add(key_env)
+    kept = [line for line in lines if not line.startswith(KEY_ENV_MARKER) and line.split("=", 1)[0] not in owned]
+    body = "".join(line + "\n" for line in kept)
+
+    if args.unset:
+        write_private(destination, body)
+        log(f"Removed the provider settings from {destination} -- the container falls back to the image's default, which is Plow's own inference.")
+        return
+
+    value = os.environ.get(key_env, "")
+    if not value.strip():
+        die(f"${key_env} is unset or empty -- export the key for {args.name} and run this again, or name the right variable with --key-env")
+    if any(character in value for character in "\r\n"):
+        die(f"${key_env} carries a newline, which would break the file this writes")
+    body += f"{KEY_ENV_MARKER}{key_env}\nHERMES_PROVIDER={args.name}\nHERMES_MODEL={args.model}\n{key_env}={value}\n"
+    written = write_private(destination, body)
+    log(f"Wrote {written} (mode 600): {args.name} / {args.model}, key from ${key_env}.")
+    log("`docker compose up -d` from the directory holding compose.yml applies it.")
+
+
 def project_override(directory: str) -> str:
     """Where a project-selection variable is set, or "" if nowhere.
 
@@ -412,12 +500,24 @@ def main() -> int:
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
+    it = verbs.add_parser("provider", help="where inference goes, written to ./.env")
+    it.add_argument("name", nargs="?", help="provider id the image knows, e.g. anthropic; omit to show what ./.env says")
+    it.add_argument("model", nargs="?", help="model id, as that provider spells it -- ask the provider, not this tool")
+    it.add_argument("--key-env", default=None, help=f"the variable holding the key (default: <NAME>_API_KEY). Its VALUE is read from this shell and written to the file")
+    it.add_argument("--unset", action="store_true", help="remove the provider settings and the key again")
+    it.add_argument("--out", default=DEFAULT_ENV, help=f"where to write it (default ./{DEFAULT_ENV})")
+    it.set_defaults(run=provider)
+
     for verb in ("revoke", "delete"):
         it = verbs.add_parser(verb, help="revoke the credential ./plow-credentials names and tear the agent down")
         it.add_argument("--out", default=DEFAULT_OUT, help=f"the credential file to revoke and remove (default ./{DEFAULT_OUT})")
         it.set_defaults(run=revoke)
 
     args = parser.parse_args()
+    # A model id belongs to the provider it was written for, so neither is
+    # useful without the other and the image refuses to guess one.
+    if args.verb == "provider" and args.name and not args.model:
+        parser.error("provider needs a model id too: `plow-agents provider <name> <model>`")
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
     args.api_base = strip_v1(args.api_base)
     # `--api-base` is where *this tool* calls; the credential says where the
