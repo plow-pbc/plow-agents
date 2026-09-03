@@ -268,6 +268,23 @@ def mint(args: argparse.Namespace) -> None:
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
+def project_override(directory: str) -> str:
+    """Where a project-selection variable is set, or "" if nowhere.
+
+    Never honoured -- honouring one is how `down -v` reaches into a stranger's
+    project -- but not ignorable either: `docker compose up` reads these two,
+    from the shell and from `.env`, so one set here means the project started in
+    this directory may not be the one `compose.yml` names.
+    """
+    found = [f"{key} in the environment" for key in COMPOSE_ENV_OVERRIDES if key in os.environ]
+    try:
+        with open(os.path.join(directory, ".env")) as handle:
+            named = {line.split("=", 1)[0].strip() for line in handle}
+    except OSError:
+        named = set()
+    return " and ".join(found + [f"{key} in .env" for key in COMPOSE_ENV_OVERRIDES if key in named])
+
+
 def compose_down(directory: str) -> str | None:
     """`docker compose down -v` here: the container and the agent's home volume.
 
@@ -290,6 +307,14 @@ def compose_down(directory: str) -> str | None:
         return f"`docker compose` would not run in {directory} ({error}); the project there is untouched. Run:\n    {RECOVERY}"
     if failed:
         return f"Teardown failed in {directory}. There, run:\n    {RECOVERY}"
+    # Asked for a project that does not exist, `down` removes nothing and still
+    # exits 0 -- so a selector that could have named the agent's project at `up`
+    # time makes this zero unreadable, and an unreadable teardown is unfinished.
+    if override := project_override(directory):
+        return (
+            f"{override}, which `docker compose up` reads -- so what started in {directory} may not "
+            f"be the `{COMPOSE_FILE}` project just torn down. `docker compose ls` shows what is left."
+        )
     log("Container and home volume removed.")
     return None
 

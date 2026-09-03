@@ -90,8 +90,10 @@ would be -- named explicitly, `-f ./compose.yml --project-directory .`, with any
 `--env-file` pointed at an empty file, because Compose reads those same two out
 of the `.env` this directory is meant to have. What comes down is this
 directory's project and never one those happen to name. A teardown that could
-not run -- no compose file here, no docker, a `down` that failed -- is reported
-as exactly that, with the command to finish it by hand, and exits 2: the
+not run -- no compose file here, no docker, a `down` that failed, or a
+`COMPOSE_PROJECT_NAME` that `up` would have read and so may have started the
+agent under another name -- is reported as exactly that, with the command to
+finish it by hand, and exits 2: the
 credential is revoked and the agent can do nothing, but its container was not
 removed and only you can say where it went. What is *not* deleted, here as in the cloud, is the chat on the
 line: it and its history are the owner's, and they stay.
