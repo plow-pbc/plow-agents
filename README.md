@@ -22,6 +22,8 @@ cp /path/to/plow-agents/compose.example.yml compose.yml
 plow-agents login
 
 plow-agents lines
+plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
+plow-agents profile --show
 plow-agents mint ln_xxx           # before the first `up`
 docker compose up --build -d
 docker compose logs -f agent
