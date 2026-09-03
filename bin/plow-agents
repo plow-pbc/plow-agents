@@ -6,7 +6,7 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
-    plow-agents revoke           revoke that credential and tear the agent down
+    plow-agents revoke [line]    revoke a local credential by file or line
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
 revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
@@ -20,7 +20,6 @@ import argparse
 import json
 import os
 import stat
-import subprocess
 import sys
 import tempfile
 import time
@@ -29,27 +28,7 @@ import urllib.request
 from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
-DEFAULT_OUT = "plow-credentials"
-# The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
-# NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
-KEY_ID_MARKER = "# plow-agents-key-id: "
-# The file this repo ships and the one `mint` tells you to copy. Not a search
-# over Compose's four names: the agent's project is this one, and a directory
-# without it gets told so rather than having a stranger's project found in it.
-COMPOSE_FILE = "compose.yml"
-# Both would point `docker compose` somewhere other than the directory being
-# torn down, so neither is passed on to it.
-COMPOSE_ENV_OVERRIDES = ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME")
-# Three ways to be aimed at the wrong project, and a `down -v` aimed at the
-# wrong project deletes someone else's containers and volumes: the two above
-# inherited from the shell, and the same two read out of this directory's own
-# `.env`, which Compose sources by default and which this compose.yml invites
-# you to keep. So the file and the directory are named here, those two are
-# dropped from the subprocess environment, and `.env` is replaced by an empty
-# one. RECOVERY is the same command for a human to paste: a bare `docker
-# compose down -v` is exactly what this refuses to run.
-COMPOSE = ("docker", "compose", "--env-file", os.devnull, "-f", f"./{COMPOSE_FILE}", "--project-directory", ".")
-RECOVERY = "env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME " + " ".join(COMPOSE) + " down -v"
+CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
 TIMEOUT_S = 900
 
@@ -120,19 +99,35 @@ def write_private(path: str, body: str) -> str:
     return destination
 
 
-def read_key_id(path: str) -> str | None:
-    """The key id `mint` recorded in a credential file, or None if there is no
-    such file. A file that is there but names no single id stops the run: it is
-    a live credential this tool has no safe way to retire."""
+def credential_key_id(path: str, keys: object, *, tolerate_unmatched: bool = False) -> str | None:
+    """Find the one API key whose published prefix matches this credential."""
     try:
         with open(path) as handle:
             content = handle.read()
     except OSError:
         return None
-    ids = [line[len(KEY_ID_MARKER):].strip() for line in content.splitlines() if line.startswith(KEY_ID_MARKER)]
-    if len(ids) != 1 or not ids[0].isdigit():
-        die(f"{path} does not name exactly one key id -- run `plow-agents revoke` first, or revoke it in the Plow dashboard and delete the file")
-    return ids[0]
+    tokens = [line.split("=", 1)[1] for line in content.splitlines() if line.startswith("PLOW_AGENT_TOKEN=")]
+    token = tokens[0] if len(tokens) == 1 and tokens[0].startswith("plow_") else ""
+    prefix = token[5:13]
+    if not prefix:
+        if tolerate_unmatched:
+            return ""
+        die(f"no valid agent token in {path} -- revoke it in the Plow dashboard and delete the file")
+    # Plow auth.py derives KeyInfo.key_prefix from the same slice of the token.
+    matches = [
+        str(key["id"])
+        for key in (keys if isinstance(keys, list) else [])
+        if (key_prefix := key.get("key_prefix")) and token[5:5 + len(key_prefix)] == key_prefix
+    ]
+    if not matches:
+        if tolerate_unmatched:
+            return ""
+        die(f"no key matches the token in {path} -- revoke it in the Plow dashboard and delete the file")
+    if len(matches) > 1:
+        if tolerate_unmatched:
+            return ""
+        die(f"more than one key matches the token in {path} -- revoke in the Plow dashboard")
+    return matches[0]
 
 
 def revoke_key(args: argparse.Namespace, key_id: str, token: str) -> None:
@@ -187,8 +182,8 @@ def account_lines(chats: object) -> dict[str, tuple[str, str]]:
     return seen
 
 
-def line_holders(keys: object) -> dict[str, list[str]]:
-    """Who is already answering on each line, uid -> ["cloud <uid>", "local <id>"].
+def line_holders(keys: object) -> dict[str, list[tuple[str, str]]]:
+    """Who is already answering on each line, uid -> [(kind, id)].
 
     One call answers it. A key carries both the line its grant resolves to and
     the cloud agent it belongs to, so a cloud agent needs no second lookup --
@@ -199,14 +194,20 @@ def line_holders(keys: object) -> dict[str, list[str]]:
     That is the question being asked: not who *could* write to the line, but who
     is an assistant on it.
     """
-    holders: dict[str, list[str]] = {}
+    holders: dict[str, list[tuple[str, str]]] = {}
     for key in keys if isinstance(keys, list) else []:
         line = key.get("assistant_line") or {}
         if not line.get("uid") or not key.get("is_active"):
             continue
         agent_uid = key.get("agent_id")
-        holders.setdefault(line["uid"], []).append(f"cloud {agent_uid}" if agent_uid else f"local {key['id']}")
+        holders.setdefault(line["uid"], []).append(
+            ("cloud", str(agent_uid)) if agent_uid else ("local", str(key["id"]))
+        )
     return holders
+
+
+def format_holder(holder: tuple[str, str]) -> str:
+    return f"{holder[0]} {holder[1]}"
 
 
 def login(args: argparse.Namespace) -> None:
@@ -215,7 +216,7 @@ def login(args: argparse.Namespace) -> None:
     # asked for only when you say so. Nothing on this machine can decide it
     # either -- a cached token is evidence about whoever logged in last, which
     # need not be the account about to text the code below.
-    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": args.name, "provision_chat": args.new_line})
+    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": "plow-agents", "provision_chat": args.new_line})
     code, secret, send_to = (payload.get(k, "") for k in ("display_code", "activation_secret", "send_to"))
     if not (code and secret and send_to):
         die("activation returned no code, secret or number")
@@ -252,29 +253,38 @@ def lines(args: argparse.Namespace) -> None:
     seen = account_lines(call("GET", args.api_base, "/v1/chats", token=token))
     if not seen:
         log("No assistant lines on this account yet.")
-        log("A line arrives with your first chat; text your Plow number to be given one.")
+        log("Run `plow-agents login --new-line` to be given one.")
         return
     holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
+    print("LINE\tNAME\tNUMBER\tSTATUS")
     for uid, (name, number) in sorted(seen.items()):
-        print(f"{uid}\t{name}\t{number}\t{', '.join(holders.get(uid, [])) or 'free'}")
+        status = ", ".join(format_holder(holder) for holder in holders.get(uid, [])) or "free"
+        print(f"{uid}\t{name}\t{number}\t{status}")
 
 
 def mint(args: argparse.Namespace) -> None:
-    line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
+    line_uid = args.line
+    destination = os.path.abspath(CREDENTIAL_FILE)
+    if os.path.isdir(destination):
+        die(
+            f"{destination} is a directory -- run `docker compose down -v && "
+            "rmdir plow-credentials`, then mint again"
+        )
     account = account_token(args)
-    destination = os.path.abspath(args.out)
+    keys = call("GET", args.api_base, "/v1/api-keys", token=account)
     # Writing over a credential without retiring its key would leave a live
     # token no file on this machine names. So the old key goes first -- read
     # before anything can fail, revoked as late as possible before the new one.
-    superseded = read_key_id(destination)
+    superseded = credential_key_id(destination, keys)
     # Two agents on one line both answer, and the owner cannot tell which. So
     # the line is checked before anything is written -- and before the revoke
     # below, which would otherwise retire a working credential on the way to a
     # refusal. The key this file already names is not a conflict: re-minting
     # over it is the ordinary rotation, and it is retired two lines down.
-    held = [who for who in line_holders(call("GET", args.api_base, "/v1/api-keys", token=account)).get(line_uid, []) if who != f"local {superseded}"]
-    if held and not args.force:
-        die(f"line:{line_uid} is already answering as {', '.join(held)} -- revoke that one first, or pass --force to run a second agent on the line anyway")
+    held = [holder for holder in line_holders(keys).get(line_uid, []) if holder != ("local", superseded)]
+    if held:
+        names = ", ".join(format_holder(holder) for holder in held)
+        die(f"line:{line_uid} is already answering as {names} -- revoke that one first")
     if superseded is not None:
         revoke_key(args, superseded, account)
         log(f"Revoked key {superseded}, the one {destination} named.")
@@ -282,7 +292,7 @@ def mint(args: argparse.Namespace) -> None:
     # line here asks for the assistant role, and asking for it by scope list on
     # /v1/api-keys is how a self-hosted agent ends up with a grant that covers
     # today's threads on the number but not tomorrow's.
-    body = {"name": args.name, "line_uid": line_uid}
+    body = {"name": "plow-agent", "line_uid": line_uid}
     minted = call("POST", args.api_base, "/v1/relay/agents", token=account, body=body)
     token, key_id = minted.get("token"), minted.get("id")
     if not token or key_id is None:
@@ -291,104 +301,47 @@ def mint(args: argparse.Namespace) -> None:
     # A token carrying these would break out of its own line in the file below.
     if any(character in token for character in "\r\n\"\\"):
         die("the minted token carries quote or newline characters")
-    credential = (
-        "# The API root, without /v1 -- the agent appends its own.\n"
-        f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
-    )
+    credential = f"PLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
     written = write_private(destination, credential)
     log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
     log(f"Wrote {written} (mode 600).")
-    log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
-
-
-def project_override(directory: str) -> str:
-    """Where a project-selection variable is set, or "" if nowhere.
-
-    Never honoured -- honouring one is how `down -v` reaches into a stranger's
-    project -- but not ignorable either: `docker compose up` reads these two,
-    from the shell and from `.env`, so one set here means the project started in
-    this directory may not be the one `compose.yml` names.
-    """
-    found = [f"{key} in the environment" for key in COMPOSE_ENV_OVERRIDES if key in os.environ]
-    try:
-        with open(os.path.join(directory, ".env")) as handle:
-            named = {line.split("=", 1)[0].strip() for line in handle}
-    except OSError:
-        named = set()
-    return " and ".join(found + [f"{key} in .env" for key in COMPOSE_ENV_OVERRIDES if key in named])
-
-
-def compose_down(directory: str) -> str | None:
-    """`docker compose down -v` here: the container and the agent's home volume.
-
-    Nothing about this may gate the revoke above, which is why it runs last and
-    why it reports rather than raises -- including when `docker` is not there to
-    run at all. Down is what the cloud's `destroy` is: a machine and its disk,
-    taken away from a credential that can no longer act either way. Returns None
-    once the project is gone, otherwise why it is not.
-    """
-    if not os.path.exists(os.path.join(directory, COMPOSE_FILE)):
-        return (
-            f"No {COMPOSE_FILE} in {directory}, so nothing was torn down here. From the "
-            f"directory holding the agent's {COMPOSE_FILE}, run:\n    {RECOVERY}"
-        )
-    env = {key: value for key, value in os.environ.items() if key not in COMPOSE_ENV_OVERRIDES}
-    log(f"Running `docker compose down -v` in {directory} ...")
-    try:
-        failed = subprocess.run(COMPOSE + ("down", "-v"), cwd=directory, env=env).returncode
-    except OSError as error:
-        return f"`docker compose` would not run in {directory} ({error}); the project there is untouched. Run:\n    {RECOVERY}"
-    if failed:
-        return f"Teardown failed in {directory}. There, run:\n    {RECOVERY}"
-    # Asked for a project that does not exist, `down` removes nothing and still
-    # exits 0 -- so a selector that could have named the agent's project at `up`
-    # time makes this zero unreadable, and an unreadable teardown is unfinished.
-    if override := project_override(directory):
-        return (
-            f"{override}, which `docker compose up` reads -- so what started in {directory} may not "
-            f"be the `{COMPOSE_FILE}` project just torn down. `docker compose ls` shows what is left."
-        )
-    log("Container and home volume removed.")
-    return None
 
 
 def revoke(args: argparse.Namespace) -> None:
-    """The local equivalent of `DELETE /v1/agents/cloud/{id}`.
-
-    Same order and for the same reason: the credential goes first, before
-    anything that could fail is even looked at, so an agent whose deletion
-    errored is one that has already lost the ability to act. The chat on the
-    line is left alone here too -- it is the owner's, not the container's.
-    """
-    path = os.path.abspath(args.out)
-    key_id = read_key_id(path)
-    if key_id is None:
-        die(f"no credential file at {path}")
-    revoke_key(args, key_id, account_token(args))
+    """Revoke the credential file's key, or recover one local key by line."""
+    path = os.path.abspath(CREDENTIAL_FILE)
+    account = account_token(args)
+    keys = call("GET", args.api_base, "/v1/api-keys", token=account)
+    if args.line:
+        line_uid = args.line
+        holders = line_holders(keys).get(line_uid, [])
+        if len(holders) != 1:
+            die(f"line:{line_uid} has {len(holders)} active holders -- expected exactly one local credential")
+        kind, key_id = holders[0]
+        if kind != "local":
+            die(f"line:{line_uid} is held by {format_holder(holders[0])} -- delete that agent in Plow")
+    else:
+        key_id = credential_key_id(path, keys)
+        if key_id is None:
+            die(f"no credential file at {path}")
+    revoke_key(args, key_id, account)
     log(f"Revoked key {key_id}.")
-    # The file names a key that no longer works, so failing to remove it does
-    # not stop the teardown -- the container is the part still able to run.
-    left_behind = []
+    if args.line:
+        file_key_id = credential_key_id(path, keys, tolerate_unmatched=True)
+        if file_key_id is None:
+            return
+        if not file_key_id:
+            log(f"Left {path} in place: its token does not identify one key.")
+            return
+        if file_key_id != key_id:
+            log(f"Left {path} in place: it names key {file_key_id}, not the revoked key {key_id}.")
+            return
     try:
         os.unlink(path)
     except OSError as error:
-        left_behind.append(f"{path} could not be removed ({error}). It names a dead key; delete it yourself.")
-    else:
-        log(f"Removed {path}.")
-    standing = compose_down(os.getcwd())
-    if standing is not None:
-        left_behind.append(standing)
-    if not left_behind:
-        log("The agent is gone. The chat on its line stays, with its history.")
-        return
-    for note in left_behind:
-        log(note)
-    log(
-        "The credential is revoked -- the agent cannot reach Plow and can do nothing -- "
-        f"but the delete did not finish{'' if standing is None else ': its container and home volume may still exist'}."
-    )
-    log("The chat on its line stays, with its history.")
-    raise SystemExit(2)
+        log(f"{path} could not be removed ({error}). It names a dead key; delete it yourself.")
+        raise SystemExit(2)
+    log(f"Removed {path}.")
 
 
 def main() -> int:
@@ -398,7 +351,6 @@ def main() -> int:
     verbs = parser.add_subparsers(dest="verb", required=True)
 
     it = verbs.add_parser("login", help="text a code, store this account's token")
-    it.add_argument("--name", default="plow-agents", help="name recorded on the account credential")
     it.add_argument("--new-line", action="store_true", help="also have Plow give this account a new assistant line and a chat on it")
     it.set_defaults(run=login)
 
@@ -406,16 +358,12 @@ def main() -> int:
 
     it = verbs.add_parser("mint", help="a credential for one line, written to ./plow-credentials")
     it.add_argument("line", help="line uid, as printed by `lines`")
-    it.add_argument("--name", default="plow-agent", help="name recorded on the agent credential")
-    it.add_argument("--out", default=DEFAULT_OUT, help=f"where to write it, relative to the current directory (default ./{DEFAULT_OUT})")
-    it.add_argument("--force", action="store_true", help="mint even though something is already answering on that line")
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
-    for verb in ("revoke", "delete"):
-        it = verbs.add_parser(verb, help="revoke the credential ./plow-credentials names and tear the agent down")
-        it.add_argument("--out", default=DEFAULT_OUT, help=f"the credential file to revoke and remove (default ./{DEFAULT_OUT})")
-        it.set_defaults(run=revoke)
+    it = verbs.add_parser("revoke", help="revoke ./plow-credentials, or one local credential by line")
+    it.add_argument("line", nargs="?", help="line uid whose sole local credential should be revoked")
+    it.set_defaults(run=revoke)
 
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
