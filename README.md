@@ -5,6 +5,13 @@ Plow line. The agent opens an outbound connection to Plow; Compose publishes no
 ports. This repository is one stdlib-only Python CLI plus a minimal
 `compose.example.yml` for new agents.
 
+The images this runs start from
+[`plow-pbc/plow-hermes-agent`](https://github.com/plow-pbc/plow-hermes-agent);
+[`plow-pbc/life-assistant-hermes-agent`](https://github.com/plow-pbc/life-assistant-hermes-agent)
+is the worked variant, and what Plow itself asks of an image is
+`api/cloud-agents/README.md` in `plow-pbc/plow`. The base image's README,
+"The repos", maps all of them.
+
 ## Develop an agent locally
 
 Each agent repository owns its `compose.yml`. Put `plow-agents/bin` on `PATH`,
