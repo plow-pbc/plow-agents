@@ -102,6 +102,7 @@ def main() -> int:
 
         listed = run("lines", cwd=work, base=base, token=token)
         check("lines exits 0", listed.returncode, 0)
+        check("lines labels its columns", listed.stdout.splitlines()[0], "LINE\tNAME\tNUMBER\tSTATUS")
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
         check("a line nobody answers on reads free", rows.get(FREE), "free")
         check("a cloud agent's line names its agent", rows.get(CLOUD), "cloud agt_7f3")

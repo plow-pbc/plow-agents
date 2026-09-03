@@ -1,62 +1,26 @@
-# Running a Plow agent on your own machine.
-#
-# The agent is built here from its own source, so this file names a repository
-# rather than an image: no registry to be logged into, and nothing to pull that
-# you did not build. What it builds meets the Plow agent contract -- it reads
-# its credential from /var/lib/plow/credentials, keeps everything it owns under
-# /var/lib/hermes, and boots its own `Cmd`.
-#
-# It is the same file and the same boot a hosted agent gets, which is the point
-# of doing it this way: there is no local mode to diverge.
+# Build and run a Plow agent on this machine, with no inbound ports.
 name: plow-agent
 
 services:
   agent:
     build:
-      # A git URL, so the build context is the repository at that ref and no
-      # clone is needed out here. `#main` is the ref: point PLOW_AGENT_REPO at
-      # a branch, a tag, or a local directory to build something else.
-      #
-      # The first build takes a few minutes. It builds for this machine's
-      # architecture, which is why it is a build and not a pull.
+      # An absolute local checkout, or a git URL with a #ref.
       context: ${PLOW_AGENT_REPO:-https://github.com/plow-pbc/plow-hermes-agent.git#main}
     volumes:
-      # The credential, and the whole of what the image is told: two lines,
-      # written by `plow-agents mint`. See plow-credentials.example.
-      #
-      # Mounted at `.host` rather than at the path the agent reads. A bind
-      # mount carries this machine's ownership and mode into the container, and
-      # the image refuses a credential file that is not root's alone -- it
-      # decides which API the agent's bearer token is sent to. So the image
-      # copies this one into place as root instead. Read-only: rotation is a
-      # rewrite out here and a restart, never a write from inside.
+      # `plow-agents mint` writes this before the first `docker compose up`.
       - ./plow-credentials:/var/lib/plow/credentials.host:ro
-      # The agent's home: its sessions, memories, credentials and the config
-      # it rewrites. Deleting this volume deletes the agent, not just its
-      # container. The path belongs to the image, not to this file -- override
-      # PLOW_AGENT_HOME if you run one that keeps its home somewhere else.
+      # Home survives a restart. `docker compose down -v` resets it so a rebuilt
+      # image's files are visible; override the path only for a compatible image.
       - agent-home:${PLOW_AGENT_HOME:-/var/lib/hermes}
     environment:
-      # Where inference goes. The only settings that are not the agent's
-      # identity, which is why they are here and not in the credential file --
-      # they are a decision about this container. Set them in `.env` beside
-      # this file; `HERMES_MODEL` is not optional when changing provider,
-      # because a model id belongs to the provider it was written for.
       HERMES_PROVIDER: ${HERMES_PROVIDER:-plow}
       HERMES_MODEL: ${HERMES_MODEL:-}
-    # PLOW_AGENT_REPO above, and anything the chosen inference provider reads
-    # -- an API key, say. Never the credential above.
     env_file:
       - path: .env
         required: false
     restart: unless-stopped
-    # The agent checkpoints its session and releases its compression lease on
-    # SIGTERM, and its supervisor allows that 30s. Docker's own deadline has to
-    # sit outside that one, or the checkpoint is cut off and the next boot
-    # cannot append to that transcript until the orphaned lease expires.
+    # The agent's supervisor allows 30s to checkpoint and release its lease.
     stop_grace_period: 35s
-    # No ports. The agent's only path to Plow is the socket it opens outbound;
-    # its local API server is loopback-only and holds credentials.
 
 volumes:
   agent-home:

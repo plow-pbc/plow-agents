@@ -237,6 +237,7 @@ def lines(args: argparse.Namespace) -> None:
         log("Run `plow-agents login --new-line` to be given one.")
         return
     holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
+    print("LINE\tNAME\tNUMBER\tSTATUS")
     for uid, (name, number) in sorted(seen.items()):
         print(f"{uid}\t{name}\t{number}\t{', '.join(holders.get(uid, [])) or 'free'}")
 
