@@ -137,11 +137,13 @@ docker pull --platform linux/amd64 <registry>/<repo>:<tag>
 ```
 
 Then the normal flow, run from that scratch directory so the credential lands
-beside the `compose.yml` you just copied. `plow-agents` is still the one in your
-checkout — `~/plow-agents/bin/plow-agents`, or wherever you cloned it — and
-`--api-base` goes before the verb:
+beside the `compose.yml` you just copied. Nothing installs `plow-agents`, and
+the scratch directory has no `bin/` — so put the checkout's on `PATH` first, or
+spell out its path at every call. `--api-base` goes before the verb:
 
 ```sh
+export PATH="/path/to/plow-agents/bin:$PATH"   # or call bin/plow-agents by path
+
 plow-agents login            # prints a code; text it from the phone owning the account
 plow-agents lines            # pick a line
 plow-agents mint <line-uid>  # writes ./plow-credentials (mode 600)
@@ -151,9 +153,11 @@ plow-agents revoke           # when done
 docker compose down -v
 ```
 
-Text the line and it answers; there is no "listening" line to wait for, as the
-agent binds no port. Use a line you do not mind writing to — it greets the chat
-on boot and the history is real.
+Text the line and it answers; there is no "listening" line to wait for. The
+agent's own API server listens on 127.0.0.1:8642 *inside* the container and
+`compose.yml` publishes no port, so nothing of it reaches this machine. Use a
+line you do not mind writing to — it greets the chat on boot and the history is
+real.
 
 `revoke` says it revoked the key, which is this tool reporting its own success.
 Ask Plow instead: any authenticated call carrying that token answers 401 once
