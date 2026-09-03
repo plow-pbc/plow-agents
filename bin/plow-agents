@@ -28,8 +28,6 @@ from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
 DEFAULT_OUT = "plow-credentials"
-# All an agent needs: talk in its chats, and reach Plow's inference.
-AGENT_SCOPES = ["chats:use", "llm:chat"]
 # The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
 # NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
 KEY_ID_MARKER = "# plow-agents-key-id: "
@@ -219,7 +217,7 @@ def lines(args: argparse.Namespace) -> None:
 
 
 def mint(args: argparse.Namespace) -> None:
-    grant = args.line if args.line.startswith("line:") else f"line:{args.line}"
+    line_uid = args.line[len("line:"):] if args.line.startswith("line:") else args.line
     account = account_token(args)
     destination = os.path.abspath(args.out)
     # Writing over a credential without retiring its key would leave a live
@@ -229,11 +227,16 @@ def mint(args: argparse.Namespace) -> None:
     if superseded is not None:
         revoke_key(args, superseded, account)
         log(f"Revoked key {superseded}, the one {destination} named.")
-    body = {"name": args.name, "scopes": AGENT_SCOPES, "chat_uids": [grant]}
-    minted = call("POST", args.api_base, "/v1/api-keys", token=account, body=body)
+    # The agent's scopes are the server's to decide, not this tool's: naming a
+    # line here asks for the assistant role, and asking for it by scope list on
+    # /v1/api-keys is how a self-hosted agent ends up with a grant that covers
+    # today's threads on the number but not tomorrow's.
+    body = {"name": args.name, "line_uid": line_uid}
+    minted = call("POST", args.api_base, "/v1/relay/agents", token=account, body=body)
     token, key_id = minted.get("token"), minted.get("id")
     if not token or key_id is None:
         die("the mint returned no token or no id")
+    scopes = minted.get("scopes") or []
     # A token carrying these would break out of its own line in the file below.
     if any(character in token for character in "\r\n\"\\"):
         die("the minted token carries quote or newline characters")
@@ -242,9 +245,9 @@ def mint(args: argparse.Namespace) -> None:
         f"{KEY_ID_MARKER}{key_id}\nPLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
     )
     written = write_private(destination, credential)
-    log(f"Minted key {key_id} for {grant}, scoped to {' '.join(AGENT_SCOPES)}.")
+    log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
     log(f"Wrote {written} (mode 600).")
-    log("`docker compose up --build -d` from the directory holding compose.yml boots the agent.")
+    log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
 def revoke(args: argparse.Namespace) -> None:

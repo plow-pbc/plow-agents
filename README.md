@@ -12,9 +12,9 @@ own source repository, so there is nothing to pull and no registry to log into.
 600). It lists, mints and revokes, so of course it travels — over HTTPS, to Plow,
 which is what it is for. What it never does is enter a container: it stays on
 this machine and in your own hands. `mint` uses it to write an **agent**
-credential to `./plow-credentials`, scoped to one line — that line's chats and
-Plow's inference, nothing else. That second one is the only credential a
-container ever sees.
+credential to `./plow-credentials`, scoped to one line — that line's chats,
+Plow's inference, and the relay, nothing else. That second one is the only
+credential a container ever sees.
 
 `login` never asks Plow for an assistant line: being given one changes the
 account, and nothing on this machine can tell whether the account about to text
