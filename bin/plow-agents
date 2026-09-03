@@ -6,7 +6,7 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
-    plow-agents revoke           revoke that credential and tear the agent down
+    plow-agents revoke           revoke that credential and remove its file
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
 revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
@@ -20,7 +20,6 @@ import argparse
 import json
 import os
 import stat
-import subprocess
 import sys
 import tempfile
 import time
@@ -33,23 +32,6 @@ DEFAULT_OUT = "plow-credentials"
 # The image accepts exactly PLOW_API_BASE and PLOW_AGENT_TOKEN -- a third
 # NAME=value line is a refused boot -- so `revoke`'s key id rides in a comment.
 KEY_ID_MARKER = "# plow-agents-key-id: "
-# The file this repo ships and the one `mint` tells you to copy. Not a search
-# over Compose's four names: the agent's project is this one, and a directory
-# without it gets told so rather than having a stranger's project found in it.
-COMPOSE_FILE = "compose.yml"
-# Both would point `docker compose` somewhere other than the directory being
-# torn down, so neither is passed on to it.
-COMPOSE_ENV_OVERRIDES = ("COMPOSE_FILE", "COMPOSE_PROJECT_NAME")
-# Three ways to be aimed at the wrong project, and a `down -v` aimed at the
-# wrong project deletes someone else's containers and volumes: the two above
-# inherited from the shell, and the same two read out of this directory's own
-# `.env`, which Compose sources by default and which this compose.yml invites
-# you to keep. So the file and the directory are named here, those two are
-# dropped from the subprocess environment, and `.env` is replaced by an empty
-# one. RECOVERY is the same command for a human to paste: a bare `docker
-# compose down -v` is exactly what this refuses to run.
-COMPOSE = ("docker", "compose", "--env-file", os.devnull, "-f", f"./{COMPOSE_FILE}", "--project-directory", ".")
-RECOVERY = "env -u COMPOSE_FILE -u COMPOSE_PROJECT_NAME " + " ".join(COMPOSE) + " down -v"
 POLL_S = 3
 TIMEOUT_S = 900
 
@@ -301,94 +283,20 @@ def mint(args: argparse.Namespace) -> None:
     log("`docker compose up -d` from the directory holding compose.yml boots the agent.")
 
 
-def project_override(directory: str) -> str:
-    """Where a project-selection variable is set, or "" if nowhere.
-
-    Never honoured -- honouring one is how `down -v` reaches into a stranger's
-    project -- but not ignorable either: `docker compose up` reads these two,
-    from the shell and from `.env`, so one set here means the project started in
-    this directory may not be the one `compose.yml` names.
-    """
-    found = [f"{key} in the environment" for key in COMPOSE_ENV_OVERRIDES if key in os.environ]
-    try:
-        with open(os.path.join(directory, ".env")) as handle:
-            named = {line.split("=", 1)[0].strip() for line in handle}
-    except OSError:
-        named = set()
-    return " and ".join(found + [f"{key} in .env" for key in COMPOSE_ENV_OVERRIDES if key in named])
-
-
-def compose_down(directory: str) -> str | None:
-    """`docker compose down -v` here: the container and the agent's home volume.
-
-    Nothing about this may gate the revoke above, which is why it runs last and
-    why it reports rather than raises -- including when `docker` is not there to
-    run at all. Down is what the cloud's `destroy` is: a machine and its disk,
-    taken away from a credential that can no longer act either way. Returns None
-    once the project is gone, otherwise why it is not.
-    """
-    if not os.path.exists(os.path.join(directory, COMPOSE_FILE)):
-        return (
-            f"No {COMPOSE_FILE} in {directory}, so nothing was torn down here. From the "
-            f"directory holding the agent's {COMPOSE_FILE}, run:\n    {RECOVERY}"
-        )
-    env = {key: value for key, value in os.environ.items() if key not in COMPOSE_ENV_OVERRIDES}
-    log(f"Running `docker compose down -v` in {directory} ...")
-    try:
-        failed = subprocess.run(COMPOSE + ("down", "-v"), cwd=directory, env=env).returncode
-    except OSError as error:
-        return f"`docker compose` would not run in {directory} ({error}); the project there is untouched. Run:\n    {RECOVERY}"
-    if failed:
-        return f"Teardown failed in {directory}. There, run:\n    {RECOVERY}"
-    # Asked for a project that does not exist, `down` removes nothing and still
-    # exits 0 -- so a selector that could have named the agent's project at `up`
-    # time makes this zero unreadable, and an unreadable teardown is unfinished.
-    if override := project_override(directory):
-        return (
-            f"{override}, which `docker compose up` reads -- so what started in {directory} may not "
-            f"be the `{COMPOSE_FILE}` project just torn down. `docker compose ls` shows what is left."
-        )
-    log("Container and home volume removed.")
-    return None
-
-
 def revoke(args: argparse.Namespace) -> None:
-    """The local equivalent of `DELETE /v1/agents/cloud/{id}`.
-
-    Same order and for the same reason: the credential goes first, before
-    anything that could fail is even looked at, so an agent whose deletion
-    errored is one that has already lost the ability to act. The chat on the
-    line is left alone here too -- it is the owner's, not the container's.
-    """
+    """Revoke the agent credential named by the local credential file."""
     path = os.path.abspath(args.out)
     key_id = read_key_id(path)
     if key_id is None:
         die(f"no credential file at {path}")
     revoke_key(args, key_id, account_token(args))
     log(f"Revoked key {key_id}.")
-    # The file names a key that no longer works, so failing to remove it does
-    # not stop the teardown -- the container is the part still able to run.
-    left_behind = []
     try:
         os.unlink(path)
     except OSError as error:
-        left_behind.append(f"{path} could not be removed ({error}). It names a dead key; delete it yourself.")
-    else:
-        log(f"Removed {path}.")
-    standing = compose_down(os.getcwd())
-    if standing is not None:
-        left_behind.append(standing)
-    if not left_behind:
-        log("The agent is gone. The chat on its line stays, with its history.")
-        return
-    for note in left_behind:
-        log(note)
-    log(
-        "The credential is revoked -- the agent cannot reach Plow and can do nothing -- "
-        f"but the delete did not finish{'' if standing is None else ': its container and home volume may still exist'}."
-    )
-    log("The chat on its line stays, with its history.")
-    raise SystemExit(2)
+        log(f"{path} could not be removed ({error}). It names a dead key; delete it yourself.")
+        raise SystemExit(2)
+    log(f"Removed {path}.")
 
 
 def main() -> int:
@@ -412,10 +320,9 @@ def main() -> int:
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
-    for verb in ("revoke", "delete"):
-        it = verbs.add_parser(verb, help="revoke the credential ./plow-credentials names and tear the agent down")
-        it.add_argument("--out", default=DEFAULT_OUT, help=f"the credential file to revoke and remove (default ./{DEFAULT_OUT})")
-        it.set_defaults(run=revoke)
+    it = verbs.add_parser("revoke", help="revoke the credential ./plow-credentials names and remove the file")
+    it.add_argument("--out", default=DEFAULT_OUT, help=f"the credential file to revoke and remove (default ./{DEFAULT_OUT})")
+    it.set_defaults(run=revoke)
 
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
