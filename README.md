@@ -136,22 +136,26 @@ docker compose up --build -d
 `compose.yml` builds the agent from source. To test an image someone else built,
 point compose at it instead — from a scratch directory, so the repo stays clean
 and the credential never lands beside your checkout. Copy `compose.yml` there,
-then in the copy replace the service's whole `build:` block with an image, rename
-the project so a second test cannot share this one's home volume, and pin the
-platform if the image is not your machine's architecture:
+then in the copy replace the service's whole `build:` block with an image, give
+the project a name no other test of yours is using — the home volume is the
+project's, so two tests under one name are two agents sharing one home — and pin
+the platform if the image is not your machine's architecture. Name the image by
+digest, not by tag: a tag is only wherever it was last pushed to point, and this
+container is handed a credential carrying `relay:call` and `payments:request`.
+Test the bytes you were asked to test.
 
 ```yaml
-name: agent-test              # was: plow-agent
+name: agent-test-<yours>      # was: plow-agent; unique per concurrent test
 services:
   agent:
-    image: <registry>/<repo>:<tag>
+    image: <registry>/<repo>@sha256:<digest>
     platform: linux/amd64     # only when the arch differs
 ```
 
 ```sh
 # check emulation first, or you will blame the agent for a boot failure
 docker run --rm --platform linux/amd64 alpine uname -m   # -> x86_64
-docker pull --platform linux/amd64 <registry>/<repo>:<tag>
+docker pull --platform linux/amd64 <registry>/<repo>@sha256:<digest>
 ```
 
 Then the normal flow, run from that scratch directory so the credential lands
