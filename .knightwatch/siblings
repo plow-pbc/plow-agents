@@ -1,0 +1,12 @@
+# Repos a reviewer of THIS repo may search and cite, materialized under
+# .siblings/<owner>/<repo>. One per line.
+#
+# plow owns the API this CLI calls and `cli/plow`, the other client for the
+# same routes -- a reviewer that cannot see it cannot tell a new verb here
+# from a second copy of one that already exists there.
+#
+# plow-hermes-agent is the base image this runs. Its boot contract decides
+# what `compose.example.yml` and `mint` have to produce, so a review that
+# cannot read it is guessing at the mount paths and the credential file.
+plow-pbc/plow
+plow-pbc/plow-hermes-agent
