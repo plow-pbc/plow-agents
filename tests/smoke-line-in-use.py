@@ -48,6 +48,8 @@ class Stub(BaseHTTPRequestHandler):
     posts: list[str] = []
     minted: list[dict] = []
     revoked: list[str] = []
+    profile_updates: list[dict] = []
+    profile_get_status = 200
 
     def _send(self, status: int, payload: object) -> None:
         raw = json.dumps(payload).encode()
@@ -62,6 +64,15 @@ class Stub(BaseHTTPRequestHandler):
             return self._send(200, Stub.chats)
         if self.path == "/v1/api-keys":
             return self._send(200, KEYS)
+        if self.path == "/v1/auth/profile":
+            return self._send(Stub.profile_get_status, {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
+        self._send(404, {"detail": self.path})
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        if self.path == "/v1/auth/profile":
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            Stub.profile_updates.append(body)
+            return self._send(200, body)
         self._send(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -101,6 +112,17 @@ def main() -> int:
         token = os.path.join(work, "token")
         with open(token, "w") as handle:
             handle.write("acct_stub\n")
+
+        profile = run("profile", "--name", "Ada", "--photo", "https://example.com/ada.jpg", cwd=work, base=base, token=token)
+        check("profile update exits 0", profile.returncode, 0)
+        check("profile update sends name and photo", Stub.profile_updates[-1], {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
+
+        shown = run("profile", "--show", cwd=work, base=base, token=token)
+        check("profile show exits 0", shown.returncode, 0)
+        Stub.profile_get_status = 500
+        failed_show = run("profile", "--show", cwd=work, base=base, token=token)
+        check("profile show fails on a failed GET", failed_show.returncode != 0, True)
+        Stub.profile_get_status = 200
 
         listed = run("lines", cwd=work, base=base, token=token)
         check("lines exits 0", listed.returncode, 0)

@@ -5,6 +5,13 @@ Plow line. The agent opens an outbound connection to Plow; Compose publishes no
 ports. This repository is one stdlib-only Python CLI plus a minimal
 `compose.example.yml` for new agents.
 
+The images this runs start from
+[`plow-pbc/plow-hermes-agent`](https://github.com/plow-pbc/plow-hermes-agent);
+[`plow-pbc/life-assistant-hermes-agent`](https://github.com/plow-pbc/life-assistant-hermes-agent)
+is the worked variant, and what Plow itself asks of an image is
+`api/cloud-agents/README.md` in `plow-pbc/plow`. The base image's README,
+"The repos", maps all of them.
+
 ## Develop an agent locally
 
 Each agent repository owns its `compose.yml`. Put `plow-agents/bin` on `PATH`,
@@ -22,7 +29,10 @@ cp /path/to/plow-agents/compose.example.yml compose.yml
 plow-agents login
 
 plow-agents lines
+plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
+plow-agents profile --show
 plow-agents mint ln_xxx           # before the first `up`
+export AGENT_ID=life              # the registered Agent Index id
 docker compose up --build -d
 docker compose logs -f agent
 ```
@@ -45,6 +55,9 @@ line that already has an agent because two agents would answer the same chat.
 The first build can take a few minutes. When the log says `plow-init:
 configured ... as cht_...`, text the selected line from your phone and the
 agent will answer there.
+
+`AGENT_ID` says which registered Agent Index page receives this image's usage;
+the Life Assistant uses `life`.
 
 ### Edit, rebuild, talk, repeat
 
@@ -83,8 +96,8 @@ created `./plow-credentials` as an empty directory; recover with: `docker compos
 
 ## Credentials and authority
 
-The account token stays on the host and lets this CLI list lines, mint, and
-revoke. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
+The account token stays on the host and lets this CLI list lines, mint, revoke,
+and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` to that repo's
 `.gitignore`. Re-minting over the file rotates its old key rather than
 leaving a live credential behind. `plow-credentials.example` shows the file's
@@ -230,3 +243,9 @@ plow-ops aws ecs describe-services --cluster plow-prod --services plow-prod-api 
 plow-ops aws ecs describe-task-definition --task-definition plow-prod-api:<n> \
   | jq -r '.taskDefinition.containerDefinitions[].image'
 ```
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 The Plow Collective, Inc.
+
+"Plow" and the Plow logo are trademarks of The Plow Collective, Inc. The license grants no trademark rights.
