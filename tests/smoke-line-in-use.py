@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
 
 FREE, CLOUD, LOCAL = "ln_free", "ln_cloud", "ln_local"
+PHOTO_URL = "https://api.example.com/v1/profile-photos/2b0f9c1e-0000-4000-8000-000000000001"
 
 
 def line(uid: str, name: str) -> dict:
@@ -49,6 +50,8 @@ class Stub(BaseHTTPRequestHandler):
     minted: list[dict] = []
     revoked: list[str] = []
     profile_updates: list[dict] = []
+    photo_uploads: list[dict[str, tuple[str, bytes]]] = []
+    requests: list[str] = []
     profile_get_status = 200
 
     def _send(self, status: int, payload: object) -> None:
@@ -60,6 +63,7 @@ class Stub(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
+        Stub.requests.append(f"GET {self.path}")
         if self.path == "/v1/chats":
             return self._send(200, Stub.chats)
         if self.path == "/v1/api-keys":
@@ -69,6 +73,7 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_PATCH(self) -> None:  # noqa: N802
+        Stub.requests.append(f"PATCH {self.path}")
         if self.path == "/v1/auth/profile":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.profile_updates.append(body)
@@ -76,7 +81,22 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
+        Stub.requests.append(f"POST {self.path}")
         Stub.posts.append(self.path)
+        if self.path == "/v1/auth/profile/photo":
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            # The part's own bytes, recovered the way a server does: split on
+            # the boundary the Content-Type declared, then past the blank line
+            # that ends the part's headers.
+            boundary = self.headers["Content-Type"].split("boundary=", 1)[1].encode()
+            parts = {}
+            for part in raw.split(b"--" + boundary)[1:-1]:
+                headers, _, content = part.partition(b"\r\n\r\n")
+                field = headers.decode().partition('name="')[2].partition('"')[0]
+                parts[field] = (headers.decode(), content.rpartition(b"\r\n")[0])
+            Stub.photo_uploads.append(parts)
+            name = parts["display_name"][1].decode() if "display_name" in parts else None
+            return self._send(200, {"display_name": name, "photo_url": PHOTO_URL})
         if self.path == "/v1/relay/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
@@ -84,6 +104,7 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_DELETE(self) -> None:  # noqa: N802
+        Stub.requests.append(f"DELETE {self.path}")
         if self.path.startswith("/v1/api-keys/"):
             Stub.revoked.append(self.path.rsplit("/", 1)[1])
             return self._send(200, {"status": "revoked", "id": self.path.rsplit("/", 1)[1]})
@@ -113,9 +134,69 @@ def main() -> int:
         with open(token, "w") as handle:
             handle.write("acct_stub\n")
 
+        Stub.requests.clear()
         profile = run("profile", "--name", "Ada", "--photo", "https://example.com/ada.jpg", cwd=work, base=base, token=token)
         check("profile update exits 0", profile.returncode, 0)
         check("profile update sends name and photo", Stub.profile_updates[-1], {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
+
+        check("a photo already hosted is one PATCH and no upload", Stub.requests, ["PATCH /v1/auth/profile"])
+
+        # Schemes are case-insensitive. A prefix test that was not read
+        # HTTPS://... as a filename and went looking for it on disk.
+        for written in ("HTTPS://example.com/ada.jpg", "Https://example.com/ada.jpg", "HTTP://example.com/ada.jpg"):
+            Stub.requests.clear()
+            cased = run("profile", "--name", "Ada", "--photo", written, cwd=work, base=base, token=token)
+            check(f"{written.split(':')[0]} is a URL, not a filename", Stub.requests, ["PATCH /v1/auth/profile"])
+            check(f"and {written.split(':')[0]} is sent as given", cased.returncode == 0 and Stub.profile_updates[-1]["photo_url"] == written, True)
+
+        # A local file is uploaded, and that route stores the bytes and sets
+        # photo_url in one transaction -- so the upload is the whole write and
+        # nothing may follow it. A PATCH afterwards that failed would report an
+        # error for a photo already stored and already public.
+        photo = os.path.join(work, "ada photo.png")
+        with open(photo, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\nada")
+        Stub.requests.clear()
+        uploaded = run("profile", "--photo", photo, cwd=work, base=base, token=token)
+        check("a local file exits 0", uploaded.returncode, 0)
+        check("and is exactly one request", Stub.requests, ["POST /v1/auth/profile/photo"])
+        check("with the file's own bytes", Stub.photo_uploads[-1]["file"][1], b"\x89PNG\r\n\x1a\nada")
+        check("under a filename with nothing that could break the header", 'filename="ada_photo.png"' in Stub.photo_uploads[-1]["file"][0], True)
+        check("and prints the profile the route answered with", json.loads(uploaded.stdout)["photo_url"], PHOTO_URL)
+
+        # A name alongside a file rides in the same request, because the route
+        # writes both as it stores the bytes. Two calls meant a failure at the
+        # second left the photo public beside the name it was sent to replace.
+        Stub.requests.clear()
+        both = run("profile", "--name", "Ada", "--photo", photo, cwd=work, base=base, token=token)
+        check("a name beside a file is still one request", Stub.requests, ["POST /v1/auth/profile/photo"])
+        check("carrying both parts", Stub.photo_uploads[-1]["display_name"][1], b"Ada")
+        check("and it exits 0", both.returncode, 0)
+        check("and prints the profile with both halves set", json.loads(both.stdout), {"display_name": "Ada", "photo_url": PHOTO_URL})
+
+        # One harness for every way a file can be unusable: each is refused
+        # before the first request, so the account is left exactly as it was.
+        huge = b"\x89PNG\r\n\x1a\n" + b"\0" * (5 * 1024 * 1024)
+        for label, filename, blob, said in (
+            ("a path that is not there", "nope.png", None, "cannot read"),
+            ("a file that is not an image", "notes.txt", b"dear diary", "not a PNG, JPEG, GIF, or WebP"),
+            ("a file over the cap", "huge.png", huge, "larger than 5 MB"),
+        ):
+            unusable = os.path.join(work, filename)
+            if blob is not None:
+                with open(unusable, "wb") as handle:
+                    handle.write(blob)
+            Stub.requests.clear()
+            refused = run("profile", "--name", "Ada", "--photo", unusable, cwd=work, base=base, token=token)
+            check(f"{label} is refused", refused.returncode != 0 and said in refused.stderr, True)
+            check(f"and {label} makes zero requests", Stub.requests, [])
+
+        Stub.requests.clear()
+        named = run("profile", "--name", "Ada", cwd=work, base=base, token=token)
+        check("a name on its own is one PATCH", Stub.requests, ["PATCH /v1/auth/profile"])
+        check("and exits 0", named.returncode, 0)
+        neither = run("profile", cwd=work, base=base, token=token)
+        check("and asking for nothing is refused", neither.returncode != 0 and "needs --name, --photo, or --show" in neither.stderr, True)
 
         shown = run("profile", "--show", cwd=work, base=base, token=token)
         check("profile show exits 0", shown.returncode, 0)
@@ -136,10 +217,11 @@ def main() -> int:
         check("legacy line-prefixed input is not normalized", legacy.returncode != 0 and "0 active holders" in legacy.stderr, True)
 
         os.mkdir(os.path.join(work, "plow-credentials"))
+        before_posts = list(Stub.posts)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
         check("mint refuses a credential directory", directory.returncode, 1)
         check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
-        check("and sends no POST", Stub.posts, [])
+        check("and sends no POST", Stub.posts, before_posts)
         os.rmdir(os.path.join(work, "plow-credentials"))
 
         credential = os.path.join(work, "plow-credentials")

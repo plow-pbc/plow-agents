@@ -6,7 +6,7 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
-    plow-agents profile          set or show this account's public profile
+    plow-agents profile          set or show this account's public profile (--photo takes a file)
     plow-agents revoke [line]    revoke a local credential by file or line
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
@@ -25,12 +25,17 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
 CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
+# Plow caps a profile photo at 5 MB and takes these four formats. Restated
+# here only to refuse a file before any request is sent; the server decides.
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+PHOTO_SIGNATURES = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
 TIMEOUT_S = 900
 
 
@@ -42,12 +47,25 @@ def die(message: str) -> NoReturn:
     raise SystemExit(f"plow-agents: {message}")
 
 
-def request(method: str, url: str, *, body: dict | None = None, token: str | None = None) -> tuple[int, object]:
-    """One JSON call. Returns (status, parsed body); never raises on HTTP status."""
-    data = json.dumps(body).encode() if body is not None else None
+def request(
+    method: str,
+    url: str,
+    *,
+    body: dict | None = None,
+    token: str | None = None,
+    data: bytes | None = None,
+    content_type: str | None = None,
+) -> tuple[int, object]:
+    """One call, JSON in by default. Returns (status, parsed body); never raises on HTTP status.
+
+    `data`/`content_type` are for the one request that is not JSON in: the
+    profile photo upload, which sends the file itself.
+    """
     headers = {"Accept": "application/json"}
-    if data is not None:
-        headers["Content-Type"] = "application/json"
+    if data is None and body is not None:
+        data, content_type = json.dumps(body).encode(), "application/json"
+    if content_type is not None:
+        headers["Content-Type"] = content_type
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -263,22 +281,103 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
+def is_hosted_url(value: str) -> bool:
+    """Whether a `--photo` value names something already hosted, or a file here.
+
+    The scheme decides, and schemes are case-insensitive: a prefix test that
+    was not read `HTTPS://example.com/ada.jpg` as a filename, and went looking
+    for it on disk. Anything urlsplit cannot parse is treated as a path, which
+    is where an unparseable value gets the error that names it -- `cannot
+    read`, with the value in it -- instead of a traceback.
+    """
+    try:
+        return urllib.parse.urlsplit(value).scheme.lower() in ("http", "https")
+    except ValueError:
+        return False
+
+
+def read_photo(path: str) -> bytes:
+    """The file's bytes, refused here rather than over the network if unusable.
+
+    Everything knowable without asking Plow is settled before the first
+    request goes out, because `profile` may be writing a name too: a file that
+    turns out to be unopenable, oversized, or not an image AFTER the name has
+    landed is a command that half happened. Plow checks all of it again -- it
+    has to, this is not its only client -- and stays the authority; this is
+    only about not starting what cannot finish.
+    """
+    try:
+        with open(path, "rb") as handle:
+            content = handle.read(MAX_PHOTO_BYTES + 1)
+    except OSError as error:
+        die(f"cannot read {path}: {error}")
+    if len(content) > MAX_PHOTO_BYTES:
+        die(f"{path} is larger than {MAX_PHOTO_BYTES // (1024 * 1024)} MB")
+    if not (content.startswith(PHOTO_SIGNATURES) or (content[:4] == b"RIFF" and content[8:12] == b"WEBP")):
+        die(f"{path} is not a PNG, JPEG, GIF, or WebP image")
+    return content
+
+
+def upload_photo(api_base: str, token: str, path: str, content: bytes, name: str | None) -> object:
+    """Send the image, and the display name with it. Returns the profile Plow answers with.
+
+    One request, because that route writes both in the transaction that stores
+    the bytes. Uploading and then PATCHing the name meant a failure at the
+    second call left the photo stored and public beside the name it was sent
+    to replace, and nothing here could say which half had happened.
+    """
+    # RFC 7578, standard library, the one non-JSON request this tool makes. A
+    # quote, backslash or newline in the filename would rewrite the header
+    # around it, so only a conservative set of characters survives into it.
+    # The part's own type is left as octet-stream: Plow reads the signature of
+    # the bytes rather than anything the uploader claims, so a guess here
+    # would only be a guess.
+    boundary = "----plow-agents-" + os.urandom(16).hex()
+    filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in os.path.basename(path)) or "photo"
+    body = b""
+    if name is not None:
+        body += f'--{boundary}\r\nContent-Disposition: form-data; name="display_name"\r\n\r\n{name}\r\n'.encode()
+    body += (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    return call(
+        "POST",
+        api_base,
+        "/v1/auth/profile/photo",
+        token=token,
+        data=body,
+        content_type=f"multipart/form-data; boundary={boundary}",
+    )
+
+
 def profile(args: argparse.Namespace) -> None:
     token = account_token(args)
     if args.show:
         if args.name is not None or args.photo is not None:
             die("profile --show cannot be combined with --name or --photo")
-        result = call("GET", args.api_base, "/v1/auth/profile", token=token)
+        print(json.dumps(call("GET", args.api_base, "/v1/auth/profile", token=token), sort_keys=True))
+        return
+    if args.name is None and args.photo is None:
+        die("profile needs --name, --photo, or --show")
+
+    # A photo already hosted somewhere public is just a field, so it travels in
+    # the same PATCH as the name. A local file is not a field: it is uploaded,
+    # and that route takes the name alongside it and writes both as it stores
+    # the bytes. Either way this is exactly one request, so a run either
+    # happened or it did not -- there is no half of it to be left behind.
+    upload = args.photo is not None and not is_hosted_url(args.photo)
+    content = read_photo(args.photo) if upload else b""
+    if upload:
+        result = upload_photo(args.api_base, token, args.photo, content, args.name)
     else:
-        if args.name is None or args.photo is None:
-            die("profile requires both --name and --photo, or --show")
-        result = call(
-            "PATCH",
-            args.api_base,
-            "/v1/auth/profile",
-            token=token,
-            body={"display_name": args.name, "photo_url": args.photo},
-        )
+        body = {}
+        if args.name is not None:
+            body["display_name"] = args.name
+        if args.photo is not None:
+            body["photo_url"] = args.photo
+        result = call("PATCH", args.api_base, "/v1/auth/profile", token=token, body=body)
     print(json.dumps(result, sort_keys=True))
 
 
@@ -378,7 +477,7 @@ def main() -> int:
 
     it = verbs.add_parser("profile", help="set or show this account's public profile")
     it.add_argument("--name", help="public display name")
-    it.add_argument("--photo", help="public https photo URL")
+    it.add_argument("--photo", help="a local image file, or a public https URL")
     it.add_argument("--show", action="store_true", help="show the current profile")
     it.set_defaults(run=profile)
 
