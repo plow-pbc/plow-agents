@@ -6,10 +6,11 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
+    plow-agents profile          set or show this account's public profile
     plow-agents revoke [line]    revoke a local credential by file or line
 
-`login` stores an ACCOUNT token in ~/.config/plow/token; it lists, mints and
-revokes, so it does travel -- over HTTPS, to Plow. What it never does is enter a
+`login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
+revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
 container. `mint` uses it for an AGENT credential scoped to one line, and that
 second one is the only credential a container ever sees.
 """
@@ -262,6 +263,25 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
+def profile(args: argparse.Namespace) -> None:
+    token = account_token(args)
+    if args.show:
+        if args.name is not None or args.photo is not None:
+            die("profile --show cannot be combined with --name or --photo")
+        result = call("GET", args.api_base, "/v1/auth/profile", token=token)
+    else:
+        if args.name is None or args.photo is None:
+            die("profile requires both --name and --photo, or --show")
+        result = call(
+            "PATCH",
+            args.api_base,
+            "/v1/auth/profile",
+            token=token,
+            body={"display_name": args.name, "photo_url": args.photo},
+        )
+    print(json.dumps(result, sort_keys=True))
+
+
 def mint(args: argparse.Namespace) -> None:
     line_uid = args.line
     destination = os.path.abspath(CREDENTIAL_FILE)
@@ -355,6 +375,12 @@ def main() -> int:
     it.set_defaults(run=login)
 
     verbs.add_parser("lines", help="the assistant lines this account holds").set_defaults(run=lines)
+
+    it = verbs.add_parser("profile", help="set or show this account's public profile")
+    it.add_argument("--name", help="public display name")
+    it.add_argument("--photo", help="public https photo URL")
+    it.add_argument("--show", action="store_true", help="show the current profile")
+    it.set_defaults(run=profile)
 
     it = verbs.add_parser("mint", help="a credential for one line, written to ./plow-credentials")
     it.add_argument("line", help="line uid, as printed by `lines`")

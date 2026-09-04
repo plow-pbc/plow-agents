@@ -22,6 +22,8 @@ cp /path/to/plow-agents/compose.example.yml compose.yml
 plow-agents login
 
 plow-agents lines
+plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
+plow-agents profile --show
 plow-agents mint ln_xxx           # before the first `up`
 export AGENT_ID=life              # the registered Agent Index id
 docker compose up --build -d
@@ -87,8 +89,8 @@ created `./plow-credentials` as an empty directory; recover with: `docker compos
 
 ## Credentials and authority
 
-The account token stays on the host and lets this CLI list lines, mint, and
-revoke. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
+The account token stays on the host and lets this CLI list lines, mint, revoke,
+and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` to that repo's
 `.gitignore`. Re-minting over the file rotates its old key rather than
 leaving a live credential behind. `plow-credentials.example` shows the file's
