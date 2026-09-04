@@ -18,14 +18,15 @@ owns what is in
 [`plow-hermes-agent` README § The repos](https://github.com/plow-pbc/plow-hermes-agent#the-repos);
 read it before a change that touches a neighbour. The test is **who else would
 have to change if this fact changed** — if the answer is a sibling, the change
-belongs there and this repo takes a pin bump.
+belongs there; this repo only follows, by bumping its pin if it holds one.
 
 Not here:
 
 - A second copy of a plow CLI command — `plow-pbc/plow` owns `cli/plow` and the
   routes behind it.
-- Container lifecycle and the compose template — `plow-pbc/agent-mgr` still owns
-  those until `agent-mgr#130` moves them.
+- Container lifecycle and the fleet's runtime Compose surface — `plow-pbc/agent-mgr`
+  still owns those until `agent-mgr#130` moves them. The minimal starter
+  `compose.example.yml` a new agent repo copies is this repo's.
 - An agent's persona, skills, or model default — the variant repo, or
   `plow-pbc/plow-hermes-agent` for the base default.
 - The image's boot contract, mount paths, and config seed —

@@ -8,5 +8,10 @@
 # plow-hermes-agent is the base image this runs. Its boot contract decides
 # what `compose.example.yml` and `mint` have to produce, so a review that
 # cannot read it is guessing at the mount paths and the credential file.
+#
+# agent-mgr is the runner this one succeeds; it still owns container lifecycle
+# and the fleet's Compose surface (agent-mgr#130), so the gate that routes
+# those there has to be able to read it.
 plow-pbc/plow
 plow-pbc/plow-hermes-agent
+plow-pbc/agent-mgr

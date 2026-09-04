@@ -8,7 +8,7 @@ themselves and is deliberately not restated here.
 
 **The way a developer runs one of the Plow agent images on a machine of their
 own.** One stdlib-only Python CLI over the credential lifecycle — `login`,
-`lines`, `profile`, `mint`, `revoke` — plus a minimal `compose.example.yml` to
+`lines`, `mint`, `revoke` — plus a minimal `compose.example.yml` to
 copy into a new agent repository. It builds and mints; it does not own the
 image, the API, or the container.
 
