@@ -9,8 +9,38 @@ The images this runs start from
 [`plow-pbc/plow-hermes-agent`](https://github.com/plow-pbc/plow-hermes-agent);
 [`plow-pbc/life-assistant-hermes-agent`](https://github.com/plow-pbc/life-assistant-hermes-agent)
 is the worked variant, and what Plow itself asks of an image is
-`api/cloud-agents/README.md` in `plow-pbc/plow`. The base image's README,
-"The repos", maps all of them.
+`api/cloud-agents/README.md` in `plow-pbc/plow`.
+
+## Where changes go
+
+This repo is one of several that assemble a Plow agent. The map of which repo
+owns what is in
+[`plow-hermes-agent` README § The repos](https://github.com/plow-pbc/plow-hermes-agent#the-repos);
+read it before a change that touches a neighbour. The test is **who else would
+have to change if this fact changed** — if the answer is a sibling, the change
+belongs there; this repo only follows, by bumping its pin if it holds one.
+
+Not here:
+
+- A second copy of a plow CLI command — `plow-pbc/plow` owns `cli/plow` and the
+  routes behind it.
+- Container lifecycle and the fleet's runtime Compose surface — `plow-pbc/agent-mgr`
+  still owns those until `agent-mgr#130` moves them. The minimal starter
+  `compose.example.yml` a new agent repo copies is this repo's.
+- An agent's persona, skills, or model default — the variant repo, or
+  `plow-pbc/plow-hermes-agent` for the base default.
+- The image's boot contract, mount paths, and config seed —
+  `plow-pbc/plow-hermes-agent`.
+
+Examples:
+
+- Adheres: #6 deleted the Docker and Compose surface #2 had grown here (−614
+  lines), handing container control back to the runner that owns it —
+  https://github.com/plow-pbc/plow-agents/pull/6
+- Violates: #9 added `plow-agents profile` against
+  `GET`/`PATCH /v1/auth/profile`, a second CLI for a route `plow`'s own
+  `cli/plow/commands/profile.py` already wraps —
+  https://github.com/plow-pbc/plow-agents/pull/9
 
 ## Develop an agent locally
 
