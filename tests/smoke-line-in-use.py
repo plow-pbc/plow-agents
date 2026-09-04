@@ -51,6 +51,7 @@ class Stub(BaseHTTPRequestHandler):
     revoked: list[str] = []
     profile_updates: list[dict] = []
     photo_uploads: list[tuple[str, bytes]] = []
+    requests: list[str] = []
     profile_get_status = 200
 
     def _send(self, status: int, payload: object) -> None:
@@ -62,6 +63,7 @@ class Stub(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
+        Stub.requests.append(f"GET {self.path}")
         if self.path == "/v1/chats":
             return self._send(200, Stub.chats)
         if self.path == "/v1/api-keys":
@@ -71,6 +73,7 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_PATCH(self) -> None:  # noqa: N802
+        Stub.requests.append(f"PATCH {self.path}")
         if self.path == "/v1/auth/profile":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.profile_updates.append(body)
@@ -78,6 +81,7 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
+        Stub.requests.append(f"POST {self.path}")
         Stub.posts.append(self.path)
         if self.path == "/v1/auth/profile/photo":
             raw = self.rfile.read(int(self.headers["Content-Length"]))
@@ -88,7 +92,7 @@ class Stub(BaseHTTPRequestHandler):
             part = raw.split(b"--" + boundary)[1]
             headers, _, content = part.partition(b"\r\n\r\n")
             Stub.photo_uploads.append((headers.decode(), content.rpartition(b"\r\n")[0]))
-            return self._send(200, {"display_name": None, "photo_url": PHOTO_URL})
+            return self._send(200, {"display_name": "Ada", "photo_url": PHOTO_URL})
         if self.path == "/v1/relay/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
@@ -96,6 +100,7 @@ class Stub(BaseHTTPRequestHandler):
         self._send(404, {"detail": self.path})
 
     def do_DELETE(self) -> None:  # noqa: N802
+        Stub.requests.append(f"DELETE {self.path}")
         if self.path.startswith("/v1/api-keys/"):
             Stub.revoked.append(self.path.rsplit("/", 1)[1])
             return self._send(200, {"status": "revoked", "id": self.path.rsplit("/", 1)[1]})
@@ -125,30 +130,48 @@ def main() -> int:
         with open(token, "w") as handle:
             handle.write("acct_stub\n")
 
+        Stub.requests.clear()
         profile = run("profile", "--name", "Ada", "--photo", "https://example.com/ada.jpg", cwd=work, base=base, token=token)
         check("profile update exits 0", profile.returncode, 0)
         check("profile update sends name and photo", Stub.profile_updates[-1], {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
 
-        check("a photo already hosted is not uploaded", Stub.posts, [])
+        check("a photo already hosted is one PATCH and no upload", Stub.requests, ["PATCH /v1/auth/profile"])
 
-        # A local file: uploaded first, and the URL Plow answers with -- not the
-        # path -- is what the profile is then set to.
+        # A local file is uploaded, and that route stores the bytes and sets
+        # photo_url in one transaction -- so the upload is the whole write and
+        # nothing may follow it. A PATCH afterwards that failed would report an
+        # error for a photo already stored and already public.
         photo = os.path.join(work, "ada photo.png")
         with open(photo, "wb") as handle:
             handle.write(b"\x89PNG\r\n\x1a\nada")
-        uploaded = run("profile", "--name", "Ada", "--photo", photo, cwd=work, base=base, token=token)
+        Stub.requests.clear()
+        uploaded = run("profile", "--photo", photo, cwd=work, base=base, token=token)
         check("a local file exits 0", uploaded.returncode, 0)
-        check("and was POSTed to the photo route", Stub.posts, ["/v1/auth/profile/photo"])
+        check("and is exactly one request", Stub.requests, ["POST /v1/auth/profile/photo"])
         check("with the file's own bytes", Stub.photo_uploads[-1][1], b"\x89PNG\r\n\x1a\nada")
         check("under a filename with nothing that could break the header", 'filename="ada_photo.png"' in Stub.photo_uploads[-1][0], True)
-        check("and the profile points at the stored URL", Stub.profile_updates[-1], {"display_name": "Ada", "photo_url": PHOTO_URL})
+        check("and prints the profile the route answered with", json.loads(uploaded.stdout)["photo_url"], PHOTO_URL)
 
-        before_posts = list(Stub.posts)
-        before_updates = list(Stub.profile_updates)
+        # A name alongside a file is still two writes, but the one that
+        # publishes bytes goes last -- so a failure can never leave a photo
+        # public that the account did not finish asking for.
+        Stub.requests.clear()
+        both = run("profile", "--name", "Ada", "--photo", photo, cwd=work, base=base, token=token)
+        check("a name beside a file is written before the bytes are published", Stub.requests, ["PATCH /v1/auth/profile", "POST /v1/auth/profile/photo"])
+        check("and the name went on its own, with no photo_url guessed for it", Stub.profile_updates[-1], {"display_name": "Ada"})
+        check("and it exits 0", both.returncode, 0)
+
+        Stub.requests.clear()
         missing = run("profile", "--name", "Ada", "--photo", os.path.join(work, "nope.png"), cwd=work, base=base, token=token)
         check("a path that is not there is refused", missing.returncode != 0 and "cannot read" in missing.stderr, True)
-        check("and nothing was uploaded", Stub.posts, before_posts)
-        check("and the profile was left alone", Stub.profile_updates, before_updates)
+        check("and nothing was uploaded", [r for r in Stub.requests if "photo" in r], [])
+
+        Stub.requests.clear()
+        named = run("profile", "--name", "Ada", cwd=work, base=base, token=token)
+        check("a name on its own is one PATCH", Stub.requests, ["PATCH /v1/auth/profile"])
+        check("and exits 0", named.returncode, 0)
+        neither = run("profile", cwd=work, base=base, token=token)
+        check("and asking for nothing is refused", neither.returncode != 0 and "needs --name, --photo, or --show" in neither.stderr, True)
 
         shown = run("profile", "--show", cwd=work, base=base, token=token)
         check("profile show exits 0", shown.returncode, 0)
@@ -169,10 +192,11 @@ def main() -> int:
         check("legacy line-prefixed input is not normalized", legacy.returncode != 0 and "0 active holders" in legacy.stderr, True)
 
         os.mkdir(os.path.join(work, "plow-credentials"))
+        before_posts = list(Stub.posts)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
         check("mint refuses a credential directory", directory.returncode, 1)
         check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
-        check("and sends no POST", Stub.posts, ["/v1/auth/profile/photo"])
+        check("and sends no POST", Stub.posts, before_posts)
         os.rmdir(os.path.join(work, "plow-credentials"))
 
         credential = os.path.join(work, "plow-credentials")

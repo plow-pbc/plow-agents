@@ -276,8 +276,14 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
-def upload_photo(api_base: str, token: str, path: str) -> str:
-    """Send a local image to Plow. Returns the permanent public URL it is served at."""
+def upload_photo(api_base: str, token: str, path: str) -> object:
+    """Send a local image to Plow. Returns the profile the upload route answers with.
+
+    That route stores the bytes and sets `photo_url` in the same transaction,
+    so this call is the whole write. Nothing follows it: a PATCH afterwards
+    would report a failure for a photo that is already stored and already
+    public, with no way from here to take it back down.
+    """
     try:
         with open(path, "rb") as handle:
             content = handle.read()
@@ -296,7 +302,7 @@ def upload_photo(api_base: str, token: str, path: str) -> str:
         f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'
         "Content-Type: application/octet-stream\r\n\r\n"
     ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
-    result = call(
+    return call(
         "POST",
         api_base,
         "/v1/auth/profile/photo",
@@ -304,10 +310,6 @@ def upload_photo(api_base: str, token: str, path: str) -> str:
         data=data,
         content_type=f"multipart/form-data; boundary={boundary}",
     )
-    url = result.get("photo_url") if isinstance(result, dict) else None
-    if not isinstance(url, str):
-        die("upload succeeded but answered no photo_url")
-    return url
 
 
 def profile(args: argparse.Namespace) -> None:
@@ -315,24 +317,29 @@ def profile(args: argparse.Namespace) -> None:
     if args.show:
         if args.name is not None or args.photo is not None:
             die("profile --show cannot be combined with --name or --photo")
-        result = call("GET", args.api_base, "/v1/auth/profile", token=token)
-    else:
-        if args.name is None or args.photo is None:
-            die("profile requires both --name and --photo, or --show")
-        # A photo already hosted somewhere public is passed straight through;
-        # anything else is a path on this machine, uploaded first. The scheme
-        # decides, not whether the file happens to exist -- a mistyped path
-        # should say so, not become a URL that fails validation on the server.
-        photo_url = args.photo
-        if not photo_url.startswith(("https://", "http://")):
-            photo_url = upload_photo(args.api_base, token, photo_url)
-        result = call(
-            "PATCH",
-            args.api_base,
-            "/v1/auth/profile",
-            token=token,
-            body={"display_name": args.name, "photo_url": photo_url},
-        )
+        print(json.dumps(call("GET", args.api_base, "/v1/auth/profile", token=token), sort_keys=True))
+        return
+    if args.name is None and args.photo is None:
+        die("profile needs --name, --photo, or --show")
+
+    # A photo already hosted somewhere public is just a field, so it travels in
+    # the same PATCH as the name -- one request. A local file is not a field:
+    # it is uploaded, and that route sets `photo_url` itself as it stores the
+    # bytes. So a file is sent on its own and nothing follows it. Where a name
+    # is being set too, it goes FIRST: the request that publishes bytes is the
+    # last one made, so a run that fails partway can never leave a photo public
+    # that the account did not finish asking for.
+    upload = args.photo is not None and not args.photo.startswith(("https://", "http://"))
+    result = None
+    if args.name is not None or not upload:
+        body = {}
+        if args.name is not None:
+            body["display_name"] = args.name
+        if not upload and args.photo is not None:
+            body["photo_url"] = args.photo
+        result = call("PATCH", args.api_base, "/v1/auth/profile", token=token, body=body)
+    if upload:
+        result = upload_photo(args.api_base, token, args.photo)
     print(json.dumps(result, sort_keys=True))
 
 
