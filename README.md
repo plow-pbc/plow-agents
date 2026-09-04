@@ -157,8 +157,14 @@ turn time moves with the provider's day.
   `relay:call` and `payments:request`.
 - **`plow-ops` on `PATH`** for the usage rows. There is no owner-facing API for
   them: `/v1/usage` aggregates by model, line and day, and never splits prompt
-  from completion or carries the cache counters. Without `plow-ops` the run
-  still produces its timing table and says the usage half is missing.
+  from completion or carries the cache counters. Without it the run still
+  produces its timing table and says the usage half is missing — the record is
+  written before the query runs, so a missing binary costs the lookup, not the
+  forty minutes of turns. Re-read it later with `bench-cache report`.
+- **The rows are scoped to the run's own credential**, never to the time window
+  alone. `mint` prints the session id and the tool reads it back; on a shared
+  account — production is one — a window sums every other agent and human
+  talking to the model while the run happened. It refuses to query without it.
 - **A compose project name no other run of yours is using** (`--project`). The
   home volume belongs to the project, so two runs under one name are two agents
   sharing one home.

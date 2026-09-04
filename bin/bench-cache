@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -130,7 +131,14 @@ def write_compose(directory: Path, image: str, project: str, platform: str | Non
     return directory / "compose.yml"
 
 
-def boot(directory: Path, line: str, api_base: str, plow_agents: str, token_file: Path, agent_api_base: str | None) -> None:
+def boot(directory: Path, line: str, api_base: str, plow_agents: str, token_file: Path, agent_api_base: str | None) -> int:
+    """Mint, start, wait for the agent to take its line. Returns its session id.
+
+    That id is the whole of this run's identity in `llm_usage`: on a shared
+    account -- which production is -- a time window alone sums every agent, and
+    every human, that happened to be talking to the model while this ran. The
+    window is a convenience; the session is the answer.
+    """
     mint = [plow_agents, "--api-base", api_base, "--token-file", str(token_file), "mint", line]
     if agent_api_base:
         # What the CONTAINER dials, which is not what this CLI dials when the
@@ -140,6 +148,12 @@ def boot(directory: Path, line: str, api_base: str, plow_agents: str, token_file
     minted = run(mint, cwd=directory)
     if minted.returncode != 0:
         die(f"mint failed for {line}: {minted.stderr.strip() or minted.stdout.strip()}")
+    found = re.search(r"Minted key (\d+) ", minted.stdout + minted.stderr)
+    if not found:
+        die("could not read the minted key id from plow-agents -- refusing to run, "
+            "because without it the usage query is scoped by time alone and would "
+            "sum every other agent on the account")
+    session_id = int(found.group(1))
     up = run(["docker", "compose", "up", "-d"], cwd=directory)
     if up.returncode != 0:
         die(f"compose up failed: {up.stderr.strip()}")
@@ -147,8 +161,8 @@ def boot(directory: Path, line: str, api_base: str, plow_agents: str, token_file
     while time.time() < deadline:
         logs = run(["docker", "compose", "logs", "--no-color", "agent"], cwd=directory)
         if BOOT_MARKER in logs.stdout:
-            log(f"booted: {[l for l in logs.stdout.splitlines() if BOOT_MARKER in l][-1].strip()}")
-            return
+            log(f"booted: {[l for l in logs.stdout.splitlines() if BOOT_MARKER in l][-1].strip()} (session {session_id})")
+            return session_id
         if "plow-init:" in logs.stdout and "configured" not in logs.stdout:
             failure = [l for l in logs.stdout.splitlines() if "plow-init:" in l][-3:]
             if any("exit" in l.lower() or "refus" in l.lower() for l in failure):
@@ -165,11 +179,19 @@ def teardown(directory: Path, api_base: str, plow_agents: str, token_file: Path,
     one piece of this that is not merely untidy.
     """
     revoked = run([plow_agents, "--api-base", api_base, "--token-file", str(token_file), "revoke"], cwd=directory)
-    log(f"revoke: {(revoked.stdout + revoked.stderr).strip().splitlines()[-1] if (revoked.stdout + revoked.stderr).strip() else 'no output'}")
-    if keep:
-        log(f"--keep: leaving the container and {directory} in place")
-        return
+    output = (revoked.stdout + revoked.stderr).strip()
+    log(f"revoke: {output.splitlines()[-1] if output else 'no output'}")
     run(["docker", "compose", "down", "-v"], cwd=directory)
+    if keep:
+        log(f"--keep: leaving {directory} -- it holds a live agent credential until you revoke it")
+    else:
+        # The scratch directory is where `mint` wrote ./plow-credentials. Revoke
+        # deletes that file; anything short of a clean revoke leaves a working
+        # credential on disk, so the directory goes only when the revoke did.
+        if revoked.returncode == 0:
+            shutil.rmtree(directory, ignore_errors=True)
+    if revoked.returncode != 0:
+        die(f"revoke failed (rc={revoked.returncode}) -- a live credential is still in {directory}: {output}")
 
 
 def home_chat(token: str, api_base: str, line: str) -> str:
@@ -284,13 +306,21 @@ def usage_rows(usage_cmd: str, started: str, ended: str, session_id: int | None)
         return [], [], "column probe returned no columns -- is llm_usage there, and does --usage-cmd emit CSV?"
     missing = [column for column in CACHE_COLUMNS if column not in present]
     columns = [c for c in list(BASE_COLUMNS) + list(CACHE_COLUMNS) if c in present]
-    where = f"created_at >= '{started}' AND created_at <= '{ended}'"
-    if session_id is not None:
-        where += f" AND session_id = {session_id}"
+    # `+00` on both literals: the window is recorded in UTC, and an unqualified
+    # literal is read in the server's timezone the day this column becomes a
+    # timestamptz -- silently shifting every window by the offset. Harmless on
+    # the naive column it is today, correct on either.
+    where = f"created_at >= '{started}+00' AND created_at <= '{ended}+00'"
+    if session_id is None:
+        die("refusing to read usage without a session id -- a time window alone "
+            "sums every account active in it")
+    where += f" AND session_id = {session_id}"
     code, out, err = sql(f"SELECT {', '.join(columns)} FROM llm_usage WHERE {where} ORDER BY created_at")
     if code != 0:
         return [], columns, f"usage query failed: {err.strip() or out.strip()}"
-    lines = [l for l in out.splitlines() if l.strip()]
+    # psql -A prints a `(N rows)` footer; it parsed as a data row and inflated
+    # every request count by one.
+    lines = [l for l in out.splitlines() if l.strip() and not re.fullmatch(r"\(\d+ rows?\)", l.strip())]
     header_row = [c.strip() for c in lines[0].split(",")] if lines else columns
     rows = [dict(zip(header_row, [v.strip() for v in line.split(",")])) for line in lines[1:]]
     note = None
@@ -351,6 +381,7 @@ def header(record: dict) -> list[str]:
         "|---|---|",
         f"| image | `{record['image']}`{'' if record.get('image_pinned', True) else ' — **not digest-pinned** (locally built)'} |",
         f"| line | `{record['line']}` |",
+        f"| session | {record.get('session_id') or '**unscoped**'} |",
         f"| agent env | {', '.join(record.get('agent_env') or []) or 'none'} |",
         f"| api base | {record['api_base']} |",
         f"| api revision | {record['api_revision'] or '**unverified** (no version endpoint; pass --api-revision)'} |",
@@ -410,8 +441,10 @@ def cmd_run(args: argparse.Namespace) -> None:
     log(f"scratch: {directory}")
 
     started = now()
+    turns: list[dict] = []
+    session_id = args.session_id
     try:
-        boot(directory, args.line, args.api_base, plow_agents, token_file, args.agent_api_base)
+        session_id = boot(directory, args.line, args.api_base, plow_agents, token_file, args.agent_api_base)
         chat = home_chat(token, args.api_base, args.line)
         log(f"chat: {chat}")
         turns = drive_twin(args.twin_base, args.from_phone, args.to_phone, conversation["turns"], conversation.get("reply_timeout_s", 300))
@@ -419,7 +452,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         ended = now()
         teardown(directory, args.api_base, plow_agents, token_file, args.keep)
 
-    rows, columns, note = usage_rows(args.usage_cmd, started, ended, args.session_id)
+    out = Path(args.out or f"run-{args.label}-{started.replace(' ', 'T').replace(':', '')}.json")
     record = {
         "label": args.label,
         "image": args.image,
@@ -429,14 +462,29 @@ def cmd_run(args: argparse.Namespace) -> None:
         "conversation": args.conversation,
         "image_pinned": "@sha256:" in args.image,
         "agent_env": args.agent_env,
+        "session_id": session_id,
         "started": started,
         "ended": ended,
         "turns": turns,
-        "usage_rows": rows,
-        "has_cache_columns": all(c in columns for c in CACHE_COLUMNS),
-        "note": note,
+        "usage_rows": [],
+        "has_cache_columns": False,
+        "note": None,
     }
-    out = Path(args.out or f"run-{args.label}-{started.replace(' ', 'T').replace(':', '')}.json")
+    # The turns cost real money and forty minutes; the usage read is a lookup
+    # that can fail for reasons that have nothing to do with them (no plow-ops
+    # on PATH, an expired tunnel). Write what is already measured first, then
+    # enrich it -- so a lookup failure costs the query, not the run.
+    out.write_text(json.dumps(record, indent=1))
+    try:
+        rows, columns, note = usage_rows(args.usage_cmd, started, ended, session_id)
+    except OSError as error:
+        rows, columns, note = [], [], f"usage command could not run ({error}) -- timings are intact; re-read with `bench-cache report` after fixing it"
+        log(f"usage read failed: {error}")
+    record.update(
+        usage_rows=rows,
+        has_cache_columns=all(c in columns for c in CACHE_COLUMNS),
+        note=note,
+    )
     out.write_text(json.dumps(record, indent=1))
     log(f"raw: {out}")
     print(render([record]))
