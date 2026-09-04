@@ -322,7 +322,12 @@ def summarise(record: dict) -> dict:
     completion = sum(to_number(r.get("completion_tokens")) for r in rows)
     read = sum(to_number(r.get("cache_read_tokens")) for r in rows) if record["has_cache_columns"] else None
     write = sum(to_number(r.get("cache_write_tokens")) for r in rows) if record["has_cache_columns"] else None
-    billed_input = prompt + (read or 0) + (write or 0) if record["has_cache_columns"] else prompt
+    # `prompt_tokens` already CONTAINS the cache counters -- litellm folds
+    # cache-read and cache-write into it while also carrying them separately
+    # (anthropic/chat/transformation.py, and #1710's own comment). Adding them
+    # again halves every hit ratio this tool reports. Measured on a real row:
+    # prompt=19306, read=19209, write=95 -- the two counters ARE the prompt.
+    billed_input = prompt
     return {
         "requests": len(rows),
         "turns": len(turns),
