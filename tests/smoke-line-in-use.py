@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
 
 FREE, CLOUD, LOCAL = "ln_free", "ln_cloud", "ln_local"
+PHOTO_URL = "https://api.example.com/v1/profile-photos/2b0f9c1e-0000-4000-8000-000000000001"
 
 
 def line(uid: str, name: str) -> dict:
@@ -49,6 +50,7 @@ class Stub(BaseHTTPRequestHandler):
     minted: list[dict] = []
     revoked: list[str] = []
     profile_updates: list[dict] = []
+    photo_uploads: list[tuple[str, bytes]] = []
     profile_get_status = 200
 
     def _send(self, status: int, payload: object) -> None:
@@ -77,6 +79,16 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         Stub.posts.append(self.path)
+        if self.path == "/v1/auth/profile/photo":
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            # The part's own bytes, recovered the way a server does: split on
+            # the boundary the Content-Type declared, then past the blank line
+            # that ends the part's headers.
+            boundary = self.headers["Content-Type"].split("boundary=", 1)[1].encode()
+            part = raw.split(b"--" + boundary)[1]
+            headers, _, content = part.partition(b"\r\n\r\n")
+            Stub.photo_uploads.append((headers.decode(), content.rpartition(b"\r\n")[0]))
+            return self._send(200, {"display_name": None, "photo_url": PHOTO_URL})
         if self.path == "/v1/relay/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
@@ -117,6 +129,27 @@ def main() -> int:
         check("profile update exits 0", profile.returncode, 0)
         check("profile update sends name and photo", Stub.profile_updates[-1], {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
 
+        check("a photo already hosted is not uploaded", Stub.posts, [])
+
+        # A local file: uploaded first, and the URL Plow answers with -- not the
+        # path -- is what the profile is then set to.
+        photo = os.path.join(work, "ada photo.png")
+        with open(photo, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\nada")
+        uploaded = run("profile", "--name", "Ada", "--photo", photo, cwd=work, base=base, token=token)
+        check("a local file exits 0", uploaded.returncode, 0)
+        check("and was POSTed to the photo route", Stub.posts, ["/v1/auth/profile/photo"])
+        check("with the file's own bytes", Stub.photo_uploads[-1][1], b"\x89PNG\r\n\x1a\nada")
+        check("under a filename with nothing that could break the header", 'filename="ada_photo.png"' in Stub.photo_uploads[-1][0], True)
+        check("and the profile points at the stored URL", Stub.profile_updates[-1], {"display_name": "Ada", "photo_url": PHOTO_URL})
+
+        before_posts = list(Stub.posts)
+        before_updates = list(Stub.profile_updates)
+        missing = run("profile", "--name", "Ada", "--photo", os.path.join(work, "nope.png"), cwd=work, base=base, token=token)
+        check("a path that is not there is refused", missing.returncode != 0 and "cannot read" in missing.stderr, True)
+        check("and nothing was uploaded", Stub.posts, before_posts)
+        check("and the profile was left alone", Stub.profile_updates, before_updates)
+
         shown = run("profile", "--show", cwd=work, base=base, token=token)
         check("profile show exits 0", shown.returncode, 0)
         Stub.profile_get_status = 500
@@ -139,7 +172,7 @@ def main() -> int:
         directory = run("mint", FREE, cwd=work, base=base, token=token)
         check("mint refuses a credential directory", directory.returncode, 1)
         check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
-        check("and sends no POST", Stub.posts, [])
+        check("and sends no POST", Stub.posts, ["/v1/auth/profile/photo"])
         os.rmdir(os.path.join(work, "plow-credentials"))
 
         credential = os.path.join(work, "plow-credentials")

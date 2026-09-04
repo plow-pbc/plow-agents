@@ -6,7 +6,7 @@
     plow-agents lines            the assistant lines this account holds, and who
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
-    plow-agents profile          set or show this account's public profile
+    plow-agents profile          set or show this account's public profile (--photo takes a file)
     plow-agents revoke [line]    revoke a local credential by file or line
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
@@ -42,12 +42,25 @@ def die(message: str) -> NoReturn:
     raise SystemExit(f"plow-agents: {message}")
 
 
-def request(method: str, url: str, *, body: dict | None = None, token: str | None = None) -> tuple[int, object]:
-    """One JSON call. Returns (status, parsed body); never raises on HTTP status."""
-    data = json.dumps(body).encode() if body is not None else None
+def request(
+    method: str,
+    url: str,
+    *,
+    body: dict | None = None,
+    token: str | None = None,
+    data: bytes | None = None,
+    content_type: str | None = None,
+) -> tuple[int, object]:
+    """One call, JSON in by default. Returns (status, parsed body); never raises on HTTP status.
+
+    `data`/`content_type` are for the one request that is not JSON in: the
+    profile photo upload, which sends the file itself.
+    """
     headers = {"Accept": "application/json"}
-    if data is not None:
-        headers["Content-Type"] = "application/json"
+    if data is None and body is not None:
+        data, content_type = json.dumps(body).encode(), "application/json"
+    if content_type is not None:
+        headers["Content-Type"] = content_type
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -263,6 +276,39 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
+def one_file_form(field: str, filename: str, content: bytes) -> tuple[str, bytes]:
+    """One RFC 7578 file part, standard library only. Returns (content type, body).
+
+    A quote, backslash, or newline in the name would rewrite the header around
+    it, so only a conservative set of characters survives into it. The part's
+    own type is left unstated -- Plow reads the signature of the bytes rather
+    than anything the uploader claims, so a guess here would only be a guess.
+    """
+    boundary = "----plow-agents-" + os.urandom(16).hex()
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename) or "photo"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field}"; filename="{safe}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    return f"multipart/form-data; boundary={boundary}", head + content + f"\r\n--{boundary}--\r\n".encode()
+
+
+def upload_photo(api_base: str, token: str, path: str) -> str:
+    """Send a local image to Plow. Returns the permanent public URL it is served at."""
+    try:
+        with open(path, "rb") as handle:
+            content = handle.read()
+    except OSError as error:
+        die(f"cannot read {path}: {error}")
+    content_type, data = one_file_form("file", os.path.basename(path), content)
+    result = call("POST", api_base, "/v1/auth/profile/photo", token=token, data=data, content_type=content_type)
+    url = result.get("photo_url") if isinstance(result, dict) else None
+    if not isinstance(url, str):
+        die("upload succeeded but answered no photo_url")
+    return url
+
+
 def profile(args: argparse.Namespace) -> None:
     token = account_token(args)
     if args.show:
@@ -272,12 +318,19 @@ def profile(args: argparse.Namespace) -> None:
     else:
         if args.name is None or args.photo is None:
             die("profile requires both --name and --photo, or --show")
+        # A photo already hosted somewhere public is passed straight through;
+        # anything else is a path on this machine, uploaded first. The scheme
+        # decides, not whether the file happens to exist -- a mistyped path
+        # should say so, not become a URL that fails validation on the server.
+        photo_url = args.photo
+        if not photo_url.startswith(("https://", "http://")):
+            photo_url = upload_photo(args.api_base, token, photo_url)
         result = call(
             "PATCH",
             args.api_base,
             "/v1/auth/profile",
             token=token,
-            body={"display_name": args.name, "photo_url": args.photo},
+            body={"display_name": args.name, "photo_url": photo_url},
         )
     print(json.dumps(result, sort_keys=True))
 
@@ -378,7 +431,7 @@ def main() -> int:
 
     it = verbs.add_parser("profile", help="set or show this account's public profile")
     it.add_argument("--name", help="public display name")
-    it.add_argument("--photo", help="public https photo URL")
+    it.add_argument("--photo", help="a local image file, or a public https URL")
     it.add_argument("--show", action="store_true", help="show the current profile")
     it.set_defaults(run=profile)
 

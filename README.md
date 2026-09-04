@@ -29,7 +29,8 @@ cp /path/to/plow-agents/compose.example.yml compose.yml
 plow-agents login
 
 plow-agents lines
-plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
+plow-agents profile --name "Ada" --photo ./ada.png            # a file here; Plow hosts it
+plow-agents profile --name "Ada" --photo https://example.com/ada.jpg   # or one already public
 plow-agents profile --show
 plow-agents mint ln_xxx           # before the first `up`
 export AGENT_ID=life              # the registered Agent Index id
