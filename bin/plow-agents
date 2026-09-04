@@ -276,24 +276,6 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
-def one_file_form(field: str, filename: str, content: bytes) -> tuple[str, bytes]:
-    """One RFC 7578 file part, standard library only. Returns (content type, body).
-
-    A quote, backslash, or newline in the name would rewrite the header around
-    it, so only a conservative set of characters survives into it. The part's
-    own type is left unstated -- Plow reads the signature of the bytes rather
-    than anything the uploader claims, so a guess here would only be a guess.
-    """
-    boundary = "----plow-agents-" + os.urandom(16).hex()
-    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in filename) or "photo"
-    head = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="{field}"; filename="{safe}"\r\n'
-        "Content-Type: application/octet-stream\r\n\r\n"
-    ).encode()
-    return f"multipart/form-data; boundary={boundary}", head + content + f"\r\n--{boundary}--\r\n".encode()
-
-
 def upload_photo(api_base: str, token: str, path: str) -> str:
     """Send a local image to Plow. Returns the permanent public URL it is served at."""
     try:
@@ -301,8 +283,27 @@ def upload_photo(api_base: str, token: str, path: str) -> str:
             content = handle.read()
     except OSError as error:
         die(f"cannot read {path}: {error}")
-    content_type, data = one_file_form("file", os.path.basename(path), content)
-    result = call("POST", api_base, "/v1/auth/profile/photo", token=token, data=data, content_type=content_type)
+    # The one non-JSON request this tool makes, encoded here rather than behind
+    # a form helper -- RFC 7578, one part, standard library. A quote, backslash
+    # or newline in the filename would rewrite the header around it, so only a
+    # conservative set of characters survives into it. The part's own type is
+    # left as octet-stream: Plow reads the signature of the bytes rather than
+    # anything the uploader claims, so a guess here would only be a guess.
+    boundary = "----plow-agents-" + os.urandom(16).hex()
+    name = "".join(c if c.isalnum() or c in "._-" else "_" for c in os.path.basename(path)) or "photo"
+    data = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
+    result = call(
+        "POST",
+        api_base,
+        "/v1/auth/profile/photo",
+        token=token,
+        data=data,
+        content_type=f"multipart/form-data; boundary={boundary}",
+    )
     url = result.get("photo_url") if isinstance(result, dict) else None
     if not isinstance(url, str):
         die("upload succeeded but answered no photo_url")
