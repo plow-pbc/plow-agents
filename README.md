@@ -23,6 +23,7 @@ plow-agents login
 
 plow-agents lines
 plow-agents mint ln_xxx           # before the first `up`
+export AGENT_ID=life              # the registered Agent Index id
 docker compose up --build -d
 docker compose logs -f agent
 ```
@@ -45,6 +46,9 @@ line that already has an agent because two agents would answer the same chat.
 The first build can take a few minutes. When the log says `plow-init:
 configured ... as cht_...`, text the selected line from your phone and the
 agent will answer there.
+
+`AGENT_ID` says which registered Agent Index page receives this image's usage;
+the Life Assistant uses `life`.
 
 ### Edit, rebuild, talk, repeat
 
