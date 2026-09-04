@@ -161,10 +161,29 @@ def main() -> int:
         check("and the name went on its own, with no photo_url guessed for it", Stub.profile_updates[-1], {"display_name": "Ada"})
         check("and it exits 0", both.returncode, 0)
 
+        # Everything knowable locally is checked before the first request, so a
+        # file that cannot be used leaves the account exactly as it was --
+        # including the name, which would otherwise already be written.
         Stub.requests.clear()
         missing = run("profile", "--name", "Ada", "--photo", os.path.join(work, "nope.png"), cwd=work, base=base, token=token)
         check("a path that is not there is refused", missing.returncode != 0 and "cannot read" in missing.stderr, True)
-        check("and nothing was uploaded", [r for r in Stub.requests if "photo" in r], [])
+        check("and a missing file makes zero requests", Stub.requests, [])
+
+        not_an_image = os.path.join(work, "notes.txt")
+        with open(not_an_image, "w") as handle:
+            handle.write("dear diary")
+        Stub.requests.clear()
+        refused = run("profile", "--name", "Ada", "--photo", not_an_image, cwd=work, base=base, token=token)
+        check("a file that is not an image is refused", refused.returncode != 0 and "not a PNG, JPEG, GIF, or WebP" in refused.stderr, True)
+        check("and makes zero requests too", Stub.requests, [])
+
+        too_big = os.path.join(work, "huge.png")
+        with open(too_big, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\n" + b"\0" * (5 * 1024 * 1024))
+        Stub.requests.clear()
+        oversize = run("profile", "--name", "Ada", "--photo", too_big, cwd=work, base=base, token=token)
+        check("a file over the cap is refused", oversize.returncode != 0 and "larger than 5 MB" in oversize.stderr, True)
+        check("and is never sent", Stub.requests, [])
 
         Stub.requests.clear()
         named = run("profile", "--name", "Ada", cwd=work, base=base, token=token)

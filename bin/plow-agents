@@ -31,6 +31,10 @@ from typing import NoReturn
 DEFAULT_API_BASE = "https://api.plow.co"
 CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
+# Plow caps a profile photo at 5 MB and takes these four formats. Restated
+# here only to refuse a file before any request is sent; the server decides.
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+PHOTO_SIGNATURES = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
 TIMEOUT_S = 900
 
 
@@ -276,7 +280,29 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
-def upload_photo(api_base: str, token: str, path: str) -> object:
+def read_photo(path: str) -> bytes:
+    """The file's bytes, refused here rather than over the network if unusable.
+
+    Everything knowable without asking Plow is settled before the first
+    request goes out, because `profile` may be writing a name too: a file that
+    turns out to be unopenable, oversized, or not an image AFTER the name has
+    landed is a command that half happened. Plow checks all of it again -- it
+    has to, this is not its only client -- and stays the authority; this is
+    only about not starting what cannot finish.
+    """
+    try:
+        with open(path, "rb") as handle:
+            content = handle.read(MAX_PHOTO_BYTES + 1)
+    except OSError as error:
+        die(f"cannot read {path}: {error}")
+    if len(content) > MAX_PHOTO_BYTES:
+        die(f"{path} is larger than {MAX_PHOTO_BYTES // (1024 * 1024)} MB")
+    if not (content.startswith(PHOTO_SIGNATURES) or (content[:4] == b"RIFF" and content[8:12] == b"WEBP")):
+        die(f"{path} is not a PNG, JPEG, GIF, or WebP image")
+    return content
+
+
+def upload_photo(api_base: str, token: str, path: str, content: bytes) -> object:
     """Send a local image to Plow. Returns the profile the upload route answers with.
 
     That route stores the bytes and sets `photo_url` in the same transaction,
@@ -284,11 +310,6 @@ def upload_photo(api_base: str, token: str, path: str) -> object:
     would report a failure for a photo that is already stored and already
     public, with no way from here to take it back down.
     """
-    try:
-        with open(path, "rb") as handle:
-            content = handle.read()
-    except OSError as error:
-        die(f"cannot read {path}: {error}")
     # The one non-JSON request this tool makes, encoded here rather than behind
     # a form helper -- RFC 7578, one part, standard library. A quote, backslash
     # or newline in the filename would rewrite the header around it, so only a
@@ -330,6 +351,7 @@ def profile(args: argparse.Namespace) -> None:
     # last one made, so a run that fails partway can never leave a photo public
     # that the account did not finish asking for.
     upload = args.photo is not None and not args.photo.startswith(("https://", "http://"))
+    content = read_photo(args.photo) if upload else b""
     result = None
     if args.name is not None or not upload:
         body = {}
@@ -339,7 +361,7 @@ def profile(args: argparse.Namespace) -> None:
             body["photo_url"] = args.photo
         result = call("PATCH", args.api_base, "/v1/auth/profile", token=token, body=body)
     if upload:
-        result = upload_photo(args.api_base, token, args.photo)
+        result = upload_photo(args.api_base, token, args.photo, content)
     print(json.dumps(result, sort_keys=True))
 
 
