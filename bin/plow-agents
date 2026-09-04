@@ -302,25 +302,28 @@ def read_photo(path: str) -> bytes:
     return content
 
 
-def upload_photo(api_base: str, token: str, path: str, content: bytes) -> object:
-    """Send a local image to Plow. Returns the profile the upload route answers with.
+def upload_photo(api_base: str, token: str, path: str, content: bytes, name: str | None) -> object:
+    """Send the image, and the display name with it. Returns the profile Plow answers with.
 
-    That route stores the bytes and sets `photo_url` in the same transaction,
-    so this call is the whole write. Nothing follows it: a PATCH afterwards
-    would report a failure for a photo that is already stored and already
-    public, with no way from here to take it back down.
+    One request, because that route writes both in the transaction that stores
+    the bytes. Uploading and then PATCHing the name meant a failure at the
+    second call left the photo stored and public beside the name it was sent
+    to replace, and nothing here could say which half had happened.
     """
-    # The one non-JSON request this tool makes, encoded here rather than behind
-    # a form helper -- RFC 7578, one part, standard library. A quote, backslash
-    # or newline in the filename would rewrite the header around it, so only a
-    # conservative set of characters survives into it. The part's own type is
-    # left as octet-stream: Plow reads the signature of the bytes rather than
-    # anything the uploader claims, so a guess here would only be a guess.
+    # RFC 7578, standard library, the one non-JSON request this tool makes. A
+    # quote, backslash or newline in the filename would rewrite the header
+    # around it, so only a conservative set of characters survives into it.
+    # The part's own type is left as octet-stream: Plow reads the signature of
+    # the bytes rather than anything the uploader claims, so a guess here
+    # would only be a guess.
     boundary = "----plow-agents-" + os.urandom(16).hex()
-    name = "".join(c if c.isalnum() or c in "._-" else "_" for c in os.path.basename(path)) or "photo"
-    data = (
+    filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in os.path.basename(path)) or "photo"
+    body = b""
+    if name is not None:
+        body += f'--{boundary}\r\nContent-Disposition: form-data; name="display_name"\r\n\r\n{name}\r\n'.encode()
+    body += (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
         "Content-Type: application/octet-stream\r\n\r\n"
     ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
     return call(
@@ -328,7 +331,7 @@ def upload_photo(api_base: str, token: str, path: str, content: bytes) -> object
         api_base,
         "/v1/auth/profile/photo",
         token=token,
-        data=data,
+        data=body,
         content_type=f"multipart/form-data; boundary={boundary}",
     )
 
@@ -344,24 +347,21 @@ def profile(args: argparse.Namespace) -> None:
         die("profile needs --name, --photo, or --show")
 
     # A photo already hosted somewhere public is just a field, so it travels in
-    # the same PATCH as the name -- one request. A local file is not a field:
-    # it is uploaded, and that route sets `photo_url` itself as it stores the
-    # bytes. So a file is sent on its own and nothing follows it. Where a name
-    # is being set too, it goes FIRST: the request that publishes bytes is the
-    # last one made, so a run that fails partway can never leave a photo public
-    # that the account did not finish asking for.
+    # the same PATCH as the name. A local file is not a field: it is uploaded,
+    # and that route takes the name alongside it and writes both as it stores
+    # the bytes. Either way this is exactly one request, so a run either
+    # happened or it did not -- there is no half of it to be left behind.
     upload = args.photo is not None and not args.photo.startswith(("https://", "http://"))
     content = read_photo(args.photo) if upload else b""
-    result = None
-    if args.name is not None or not upload:
+    if upload:
+        result = upload_photo(args.api_base, token, args.photo, content, args.name)
+    else:
         body = {}
         if args.name is not None:
             body["display_name"] = args.name
-        if not upload and args.photo is not None:
+        if args.photo is not None:
             body["photo_url"] = args.photo
         result = call("PATCH", args.api_base, "/v1/auth/profile", token=token, body=body)
-    if upload:
-        result = upload_photo(args.api_base, token, args.photo, content)
     print(json.dumps(result, sort_keys=True))
 
 

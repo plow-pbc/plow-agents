@@ -50,7 +50,7 @@ class Stub(BaseHTTPRequestHandler):
     minted: list[dict] = []
     revoked: list[str] = []
     profile_updates: list[dict] = []
-    photo_uploads: list[tuple[str, bytes]] = []
+    photo_uploads: list[dict[str, tuple[str, bytes]]] = []
     requests: list[str] = []
     profile_get_status = 200
 
@@ -89,10 +89,14 @@ class Stub(BaseHTTPRequestHandler):
             # the boundary the Content-Type declared, then past the blank line
             # that ends the part's headers.
             boundary = self.headers["Content-Type"].split("boundary=", 1)[1].encode()
-            part = raw.split(b"--" + boundary)[1]
-            headers, _, content = part.partition(b"\r\n\r\n")
-            Stub.photo_uploads.append((headers.decode(), content.rpartition(b"\r\n")[0]))
-            return self._send(200, {"display_name": "Ada", "photo_url": PHOTO_URL})
+            parts = {}
+            for part in raw.split(b"--" + boundary)[1:-1]:
+                headers, _, content = part.partition(b"\r\n\r\n")
+                field = headers.decode().partition('name="')[2].partition('"')[0]
+                parts[field] = (headers.decode(), content.rpartition(b"\r\n")[0])
+            Stub.photo_uploads.append(parts)
+            name = parts["display_name"][1].decode() if "display_name" in parts else None
+            return self._send(200, {"display_name": name, "photo_url": PHOTO_URL})
         if self.path == "/v1/relay/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
@@ -148,42 +152,36 @@ def main() -> int:
         uploaded = run("profile", "--photo", photo, cwd=work, base=base, token=token)
         check("a local file exits 0", uploaded.returncode, 0)
         check("and is exactly one request", Stub.requests, ["POST /v1/auth/profile/photo"])
-        check("with the file's own bytes", Stub.photo_uploads[-1][1], b"\x89PNG\r\n\x1a\nada")
-        check("under a filename with nothing that could break the header", 'filename="ada_photo.png"' in Stub.photo_uploads[-1][0], True)
+        check("with the file's own bytes", Stub.photo_uploads[-1]["file"][1], b"\x89PNG\r\n\x1a\nada")
+        check("under a filename with nothing that could break the header", 'filename="ada_photo.png"' in Stub.photo_uploads[-1]["file"][0], True)
         check("and prints the profile the route answered with", json.loads(uploaded.stdout)["photo_url"], PHOTO_URL)
 
-        # A name alongside a file is still two writes, but the one that
-        # publishes bytes goes last -- so a failure can never leave a photo
-        # public that the account did not finish asking for.
+        # A name alongside a file rides in the same request, because the route
+        # writes both as it stores the bytes. Two calls meant a failure at the
+        # second left the photo public beside the name it was sent to replace.
         Stub.requests.clear()
         both = run("profile", "--name", "Ada", "--photo", photo, cwd=work, base=base, token=token)
-        check("a name beside a file is written before the bytes are published", Stub.requests, ["PATCH /v1/auth/profile", "POST /v1/auth/profile/photo"])
-        check("and the name went on its own, with no photo_url guessed for it", Stub.profile_updates[-1], {"display_name": "Ada"})
+        check("a name beside a file is still one request", Stub.requests, ["POST /v1/auth/profile/photo"])
+        check("carrying both parts", Stub.photo_uploads[-1]["display_name"][1], b"Ada")
         check("and it exits 0", both.returncode, 0)
+        check("and prints the profile with both halves set", json.loads(both.stdout), {"display_name": "Ada", "photo_url": PHOTO_URL})
 
-        # Everything knowable locally is checked before the first request, so a
-        # file that cannot be used leaves the account exactly as it was --
-        # including the name, which would otherwise already be written.
-        Stub.requests.clear()
-        missing = run("profile", "--name", "Ada", "--photo", os.path.join(work, "nope.png"), cwd=work, base=base, token=token)
-        check("a path that is not there is refused", missing.returncode != 0 and "cannot read" in missing.stderr, True)
-        check("and a missing file makes zero requests", Stub.requests, [])
-
-        not_an_image = os.path.join(work, "notes.txt")
-        with open(not_an_image, "w") as handle:
-            handle.write("dear diary")
-        Stub.requests.clear()
-        refused = run("profile", "--name", "Ada", "--photo", not_an_image, cwd=work, base=base, token=token)
-        check("a file that is not an image is refused", refused.returncode != 0 and "not a PNG, JPEG, GIF, or WebP" in refused.stderr, True)
-        check("and makes zero requests too", Stub.requests, [])
-
-        too_big = os.path.join(work, "huge.png")
-        with open(too_big, "wb") as handle:
-            handle.write(b"\x89PNG\r\n\x1a\n" + b"\0" * (5 * 1024 * 1024))
-        Stub.requests.clear()
-        oversize = run("profile", "--name", "Ada", "--photo", too_big, cwd=work, base=base, token=token)
-        check("a file over the cap is refused", oversize.returncode != 0 and "larger than 5 MB" in oversize.stderr, True)
-        check("and is never sent", Stub.requests, [])
+        # One harness for every way a file can be unusable: each is refused
+        # before the first request, so the account is left exactly as it was.
+        huge = b"\x89PNG\r\n\x1a\n" + b"\0" * (5 * 1024 * 1024)
+        for label, filename, blob, said in (
+            ("a path that is not there", "nope.png", None, "cannot read"),
+            ("a file that is not an image", "notes.txt", b"dear diary", "not a PNG, JPEG, GIF, or WebP"),
+            ("a file over the cap", "huge.png", huge, "larger than 5 MB"),
+        ):
+            unusable = os.path.join(work, filename)
+            if blob is not None:
+                with open(unusable, "wb") as handle:
+                    handle.write(blob)
+            Stub.requests.clear()
+            refused = run("profile", "--name", "Ada", "--photo", unusable, cwd=work, base=base, token=token)
+            check(f"{label} is refused", refused.returncode != 0 and said in refused.stderr, True)
+            check(f"and {label} makes zero requests", Stub.requests, [])
 
         Stub.requests.clear()
         named = run("profile", "--name", "Ada", cwd=work, base=base, token=token)
