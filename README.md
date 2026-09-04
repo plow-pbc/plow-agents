@@ -161,6 +161,12 @@ turn time moves with the provider's day.
   produces its timing table and says the usage half is missing — the record is
   written before the query runs, so a missing binary costs the lookup, not the
   forty minutes of turns. Re-read it later with `bench-cache report`.
+- **A `--usage-cmd` whose output this tool has actually parsed.** The default,
+  `plow-ops db query {sql}`, is **unverified**: every run so far has gone
+  through `psql -A -F,`, whose `(N rows)` footer the parser strips. If
+  `plow-ops` frames its CSV differently — a footer of another shape, or none —
+  the first prod run is where that shows up. Check the `requests` count against
+  the row list before trusting a prod table.
 - **The rows are scoped to the run's own credential**, never to the time window
   alone. `mint` prints the session id and the tool reads it back; on a shared
   account — production is one — a window sums every other agent and human

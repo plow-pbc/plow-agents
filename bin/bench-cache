@@ -181,10 +181,14 @@ def teardown(directory: Path, api_base: str, plow_agents: str, token_file: Path,
     revoked = run([plow_agents, "--api-base", api_base, "--token-file", str(token_file), "revoke"], cwd=directory)
     output = (revoked.stdout + revoked.stderr).strip()
     log(f"revoke: {output.splitlines()[-1] if output else 'no output'}")
-    run(["docker", "compose", "down", "-v"], cwd=directory)
     if keep:
-        log(f"--keep: leaving {directory} -- it holds a live agent credential until you revoke it")
+        # The container and its home stay for inspection. The credential does
+        # not: revoke ran first, by design, so what is kept is an agent that
+        # can no longer reach Plow -- read its config and logs, do not expect
+        # it to answer a message.
+        log(f"--keep: container and {directory} left up; its credential is already revoked, so the agent cannot reach Plow")
     else:
+        run(["docker", "compose", "down", "-v"], cwd=directory)
         # The scratch directory is where `mint` wrote ./plow-credentials. Revoke
         # deletes that file; anything short of a clean revoke leaves a working
         # credential on disk, so the directory goes only when the revoke did.
@@ -290,6 +294,12 @@ def usage_rows(usage_cmd: str, started: str, ended: str, session_id: int | None)
     printing zeros, which would read as "cached nothing" rather than "did not
     measure".
     """
+    def csv_lines(out: str) -> list[str]:
+        """Content lines only. psql -A appends a `(N rows)` footer, and a reader
+        that takes it for data counts one request too many (or invents a
+        column). Both readers below go through here."""
+        return [l for l in out.splitlines() if l.strip() and not re.fullmatch(r"\(\d+ rows?\)", l.strip())]
+
     def sql(statement: str) -> tuple[int, str, str]:
         argv = shlex.split(usage_cmd.replace("{sql}", "\x00"))
         argv = [statement if part == "\x00" else part for part in argv]
@@ -301,7 +311,7 @@ def usage_rows(usage_cmd: str, started: str, ended: str, session_id: int | None)
     )
     if code != 0:
         return [], [], f"column probe failed ({usage_cmd.split()[0]}): {err.strip() or out.strip()}"
-    present = {line.split(",")[0].strip() for line in out.splitlines()[1:] if line.strip()}
+    present = {line.split(",")[0].strip() for line in csv_lines(out)[1:]}
     if not present:
         return [], [], "column probe returned no columns -- is llm_usage there, and does --usage-cmd emit CSV?"
     missing = [column for column in CACHE_COLUMNS if column not in present]
@@ -318,9 +328,7 @@ def usage_rows(usage_cmd: str, started: str, ended: str, session_id: int | None)
     code, out, err = sql(f"SELECT {', '.join(columns)} FROM llm_usage WHERE {where} ORDER BY created_at")
     if code != 0:
         return [], columns, f"usage query failed: {err.strip() or out.strip()}"
-    # psql -A prints a `(N rows)` footer; it parsed as a data row and inflated
-    # every request count by one.
-    lines = [l for l in out.splitlines() if l.strip() and not re.fullmatch(r"\(\d+ rows?\)", l.strip())]
+    lines = csv_lines(out)
     header_row = [c.strip() for c in lines[0].split(",")] if lines else columns
     rows = [dict(zip(header_row, [v.strip() for v in line.split(",")])) for line in lines[1:]]
     note = None
