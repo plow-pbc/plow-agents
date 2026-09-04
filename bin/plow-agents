@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import NoReturn
 
@@ -280,6 +281,21 @@ def lines(args: argparse.Namespace) -> None:
         print(f"{uid}\t{name}\t{number}\t{status}")
 
 
+def is_hosted_url(value: str) -> bool:
+    """Whether a `--photo` value names something already hosted, or a file here.
+
+    The scheme decides, and schemes are case-insensitive: a prefix test that
+    was not read `HTTPS://example.com/ada.jpg` as a filename, and went looking
+    for it on disk. Anything urlsplit cannot parse is treated as a path, which
+    is where an unparseable value gets the error that names it -- `cannot
+    read`, with the value in it -- instead of a traceback.
+    """
+    try:
+        return urllib.parse.urlsplit(value).scheme.lower() in ("http", "https")
+    except ValueError:
+        return False
+
+
 def read_photo(path: str) -> bytes:
     """The file's bytes, refused here rather than over the network if unusable.
 
@@ -351,7 +367,7 @@ def profile(args: argparse.Namespace) -> None:
     # and that route takes the name alongside it and writes both as it stores
     # the bytes. Either way this is exactly one request, so a run either
     # happened or it did not -- there is no half of it to be left behind.
-    upload = args.photo is not None and not args.photo.startswith(("https://", "http://"))
+    upload = args.photo is not None and not is_hosted_url(args.photo)
     content = read_photo(args.photo) if upload else b""
     if upload:
         result = upload_photo(args.api_base, token, args.photo, content, args.name)

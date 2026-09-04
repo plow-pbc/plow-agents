@@ -141,6 +141,14 @@ def main() -> int:
 
         check("a photo already hosted is one PATCH and no upload", Stub.requests, ["PATCH /v1/auth/profile"])
 
+        # Schemes are case-insensitive. A prefix test that was not read
+        # HTTPS://... as a filename and went looking for it on disk.
+        for written in ("HTTPS://example.com/ada.jpg", "Https://example.com/ada.jpg", "HTTP://example.com/ada.jpg"):
+            Stub.requests.clear()
+            cased = run("profile", "--name", "Ada", "--photo", written, cwd=work, base=base, token=token)
+            check(f"{written.split(':')[0]} is a URL, not a filename", Stub.requests, ["PATCH /v1/auth/profile"])
+            check(f"and {written.split(':')[0]} is sent as given", cased.returncode == 0 and Stub.profile_updates[-1]["photo_url"] == written, True)
+
         # A local file is uploaded, and that route stores the bytes and sets
         # photo_url in one transaction -- so the upload is the whole write and
         # nothing may follow it. A PATCH afterwards that failed would report an
