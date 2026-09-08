@@ -106,10 +106,15 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         Stub.requests.append(f"DELETE {self.path}")
+        if Stub.refuse_delete:
+            Stub.refuse_delete = False
+            return self._send(500, {"detail": "revoke refused"})
         if self.path.startswith("/v1/api-keys/"):
             Stub.revoked.append(self.path.rsplit("/", 1)[1])
             return self._send(200, {"status": "revoked", "id": self.path.rsplit("/", 1)[1]})
         self._send(404, {"detail": self.path})
+
+    refuse_delete = False
 
     def log_message(self, *_: object) -> None:
         pass
@@ -270,6 +275,13 @@ def main() -> int:
         stranded = run("mint", FREE, "--credential-file", os.path.join(blocker, "creds"), cwd=work, base=base, token=token)
         check("mint fails when the destination cannot be written", stranded.returncode != 0, True)
         check("and the key it just minted was revoked", "99" in Stub.revoked[seen:], True)
+
+        Stub.refuse_delete = True
+        both = run("mint", FREE, "--credential-file", os.path.join(blocker, "creds2"), cwd=work, base=base, token=token)
+        # The retire's own failure already prints the key id, so assert on what
+        # only the pre-retire line carries: which install was left unfinished.
+        check("a retire that also fails still names the failed install", os.path.join(blocker, "creds2") in both.stderr, True)
+        Stub.refuse_delete = False
 
         # Re-minting the line this directory's own credential already holds is
         # rotation, not a second agent -- key 22 is `local 22` on that line and
