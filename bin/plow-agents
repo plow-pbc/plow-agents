@@ -70,8 +70,10 @@ def request(
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    # HTTP is restricted to development hosts; their credentials must bypass proxies.
+    open_url = urllib.request.build_opener(urllib.request.ProxyHandler({})).open if req.type == "http" else urllib.request.urlopen
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with open_url(req, timeout=30) as response:
             raw, status = response.read(), response.status
     except urllib.error.HTTPError as error:
         raw, status = error.read(), error.code

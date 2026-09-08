@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import runpy
+import socket
 import os
 import subprocess
 import sys
@@ -124,6 +125,20 @@ class Stub(BaseHTTPRequestHandler):
                     row["agent_uid"] = None
             return self._send(200, {"status": "deleted"})
         self._send(404, {"detail": self.path})
+
+    def log_message(self, *_: object) -> None:
+        pass
+
+
+class Proxy(BaseHTTPRequestHandler):
+    received: list[tuple[str, str | None, bytes]] = []
+
+    def do_GET(self) -> None:  # noqa: N802
+        Proxy.received.append((self.path, self.headers.get("Authorization"), self.rfile.read(int(self.headers.get("Content-Length", 0)))))
+        self.send_response(502)
+        self.end_headers()
+
+    do_POST = do_GET
 
     def log_message(self, *_: object) -> None:
         pass
@@ -337,13 +352,32 @@ def main() -> int:
             response = io.BytesIO(b'{"data": []}')
             response.status = 200
             argv = [CLI, "--api-base", root, "--token-file", token, "lines"]
-            with patch.object(sys, "argv", argv), patch("urllib.request.urlopen", return_value=response) as transport:
+            with patch.object(sys, "argv", argv), patch("urllib.request.OpenerDirector.open", return_value=response) as transport:
                 with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
                     try:
                         code = cli_main()
                     except SystemExit as error:
                         code = error.code
             check(f"account token transport policy for {root}", (code == 0, transport.called), (permitted, permitted))
+        proxy = HTTPServer(("127.0.0.1", 0), Proxy)
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        proxy_url = f"http://127.0.0.1:{proxy.server_address[1]}"
+        cli_request = runpy.run_path(CLI)["request"]
+        resolve = socket.getaddrinfo
+        proxy_env = {"http_proxy": proxy_url, "HTTP_PROXY": proxy_url, "no_proxy": "", "NO_PROXY": ""}
+        try:
+            with patch.dict(os.environ, proxy_env), patch("urllib.request._opener", None), patch("urllib.request.proxy_bypass", return_value=False):
+                for host in ("localhost", "127.0.0.1", "[::1]", "api.orb.local"):
+                    dev_root = f"http://{host}:{server.server_address[1]}"
+                    Stub.requests.clear()
+                    with patch("socket.getaddrinfo", side_effect=lambda host, port, *args, **kwargs: resolve("127.0.0.1", port, *args, **kwargs)):
+                        cli_request("GET", dev_root + "/v1/lines", token="synthetic_account_token")
+                        cli_request("POST", dev_root + "/v1/auth/activate/redeem", body={"activation_secret": "synthetic_activation_secret"})
+                    check(f"{host} sends both secrets directly to the origin", Stub.requests, ["GET /v1/lines", "POST /v1/auth/activate/redeem"])
+                check("configured proxy receives no request or secret", Proxy.received, [])
+        finally:
+            proxy.shutdown()
+            proxy.server_close()
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("empty lines explain activation", "login --new-line" in empty.stderr, True)
