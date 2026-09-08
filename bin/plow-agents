@@ -210,28 +210,42 @@ def line_holders(slots: object, keys: object) -> dict[str, list[tuple[str, str]]
     `GET /v1/assistants` is the mapping: a slot is a line and the assistant on
     it, or `None` when that line is free. A key no longer publishes its line at
     all -- plow #1732 replaced `assistant_line` with a bare `assistant_uid` --
-    so the keys are read only to name the credential behind a self-hosted
-    assistant, which is what `revoke --line` needs an id for.
+    so the keys are read only to name the credentials behind a self-hosted
+    assistant, which is what `revoke --line` needs ids for.
 
-    A line with no assistant holds nothing here. That is the question being
-    asked: not who *could* write to the line, but who is an assistant on it.
+    A self-hosted assistant is its credentials, and holds nothing without one.
+    Revoking a key leaves the assistant row standing (the API deactivates the
+    session and nothing else), so an assistant with no live credential is the
+    ordinary state after `revoke` -- treating it as a holder would make the
+    mint-revoke-mint cycle refuse its own second mint.
+
+    A cloud assistant is the opposite: the row *is* the agent, its VM is
+    running, and no key of ours names it. It holds the line whatever the
+    credentials say.
+
+    All matching credentials, not the first: one self-hosted assistant can have
+    several, because the API reuses the assistant row for a line and mints a
+    fresh key each time. Keeping one would let `revoke --line` retire a single
+    credential while others kept answering.
     """
-    local_keys: dict[str, str] = {}
+    local_keys: dict[str, list[str]] = {}
     for key in keys if isinstance(keys, list) else []:
         if key.get("is_active") and key.get("assistant_uid"):
-            local_keys.setdefault(str(key["assistant_uid"]), str(key["id"]))
+            local_keys.setdefault(str(key["assistant_uid"]), []).append(str(key["id"]))
     holders: dict[str, list[tuple[str, str]]] = {}
     for slot in slots if isinstance(slots, list) else []:
         line, assistant = slot.get("line") or {}, slot.get("assistant")
         if not line.get("uid") or not assistant or not assistant.get("uid"):
             continue
         uid = str(assistant["uid"])
-        # A cloud assistant is named by its own uid, which is what DELETE
-        # /v1/assistants/{uid} takes. A self-hosted one is a credential, and
-        # the key id is what revokes it.
-        holder = ("local", local_keys[uid]) if assistant.get("provider") == SELF_HOSTED and uid in local_keys else ("cloud", uid)
-        holders.setdefault(line["uid"], []).append(holder)
-    return holders
+        if assistant.get("provider") == SELF_HOSTED:
+            # The key id is what revokes one of these.
+            found = [("local", key_id) for key_id in local_keys.get(uid, [])]
+        else:
+            # Named by its own uid, which is what DELETE /v1/assistants/{uid} takes.
+            found = [("cloud", uid)]
+        holders.setdefault(line["uid"], []).extend(found)
+    return {uid: found for uid, found in holders.items() if found}
 
 
 def format_holder(holder: tuple[str, str]) -> str:

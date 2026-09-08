@@ -271,13 +271,11 @@ def main() -> int:
         cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
         check("revoke refuses a cloud-held line", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr and Stub.revoked == before, True)
 
-        # Two assistants on one line. A slot list should never say this, so
-        # the guard is defending against an API that contradicts its own shape
-        # rather than an ordinary state -- which is why it is asserted here.
-        KEYS.append({"id": 23, "key_prefix": "second22", "is_active": True, "assistant_uid": "ast_two", "assistant_provider": "self_hosted"})
-        SLOTS.append({"line": line(LOCAL, "Local"), "assistant": {"uid": "ast_two", "provider": "self_hosted"}})
+        # Two live credentials on ONE self-hosted assistant. Not a contrived
+        # state: the API reuses the assistant row for a line and mints a fresh
+        # key each time, so a second mint leaves the first one active.
+        KEYS.append({"id": 23, "key_prefix": "second22", "is_active": True, "assistant_uid": "ast_loc", "assistant_provider": "self_hosted"})
         ambiguous = run("revoke", LOCAL, cwd=work, base=base, token=token)
-        SLOTS.pop()
         KEYS.pop()
         check("revoke refuses ambiguous local holders", ambiguous.returncode != 0 and "2 active holders" in ambiguous.stderr and Stub.revoked == before, True)
 
@@ -297,6 +295,44 @@ def main() -> int:
             handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
         matching = run("revoke", LOCAL, cwd=work, base=base, token=token)
         check("line revoke removes a file naming the revoked key", matching.returncode == 0 and not os.path.exists(os.path.join(work, "plow-credentials")), True)
+
+        # mint -> revoke -> mint, the ordinary rotation, end to end.
+        #
+        # Revoking a self-hosted credential deactivates the session and leaves
+        # the assistant row standing (plow api/plow/keys/router.py: `is_active
+        # = False`, nothing touches Assistant). So the slot still names an
+        # assistant afterwards, with no live credential behind it -- and a
+        # reader that treats any named assistant as a holder refuses the second
+        # mint on a line its own revoke just freed. KEYS/SLOTS are stepped by
+        # hand because the stub's DELETE is a recorder, not a database.
+        ROTATE = "ln_rot"
+        Stub.chats = {"data": CHATS["data"] + [{"participants": [{"type": "agent", "line": line(ROTATE, "Rot")}]}]}
+        SLOTS.append({"line": line(ROTATE, "Rot"), "assistant": None})
+        rotate_free = run("lines", cwd=work, base=base, token=token)
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in rotate_free.stdout.splitlines()}
+        check("a fresh line starts free", rows.get(ROTATE), "free")
+
+        first = run("mint", ROTATE, cwd=work, base=base, token=token)
+        check("mint takes a free line", first.returncode, 0)
+        KEYS.append({"id": 91, "key_prefix": "rotate91", "is_active": True, "assistant_uid": "ast_rot", "assistant_provider": "self_hosted"})
+        SLOTS[-1] = {"line": line(ROTATE, "Rot"), "assistant": {"uid": "ast_rot", "provider": "self_hosted"}}
+        held = run("lines", cwd=work, base=base, token=token)
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in held.stdout.splitlines()}
+        check("and the line then names that credential", rows.get(ROTATE), "local 91")
+
+        # The revoke: session deactivated and the credential file removed --
+        # both halves of what `plow-agents revoke` does -- while the assistant
+        # row stays. That surviving row is the whole point of this case.
+        KEYS[-1]["is_active"] = False
+        os.path.exists(os.path.join(work, "plow-credentials")) and os.unlink(os.path.join(work, "plow-credentials"))
+        freed = run("lines", cwd=work, base=base, token=token)
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in freed.stdout.splitlines()}
+        check("a revoked credential frees its line again", rows.get(ROTATE), "free")
+
+        again = run("mint", ROTATE, cwd=work, base=base, token=token)
+        check("and the line can be minted again", again.returncode, 0)
+        KEYS.pop()
+        SLOTS.pop()
 
         Stub.chats = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
