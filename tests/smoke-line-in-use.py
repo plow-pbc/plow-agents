@@ -30,17 +30,27 @@ def line(uid: str, name: str) -> dict:
 CHATS = {"data": [{"participants": [{"type": "agent", "line": line(uid, name)}]} for uid, name in ((FREE, "Free"), (CLOUD, "Cloud"), (LOCAL, "Local"))]}
 
 KEYS = [
-    # The cloud agent's credential: a line, and an agent_id naming its agent.
-    {"id": 11, "key_prefix": "cloud11", "is_active": True, "agent_id": "agt_7f3", "assistant_line": line(CLOUD, "Cloud")},
-    # A self-hosted one: the same shape, no agent behind it.
-    {"id": 22, "key_prefix": "local222", "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")},
+    # The cloud assistant's credential. Since plow #1732 a key names its
+    # assistant and nothing else -- no line, no agent_id.
+    {"id": 11, "key_prefix": "cloud11", "is_active": True, "assistant_uid": "ast_7f3", "assistant_provider": "exe:hermes"},
+    # A self-hosted one: the key id here is what `revoke --line` must find.
+    {"id": 22, "key_prefix": "local222", "is_active": True, "assistant_uid": "ast_loc", "assistant_provider": "self_hosted"},
     # Revoked, on the line that must still read `free`.
-    {"id": 33, "key_prefix": "free3333", "is_active": False, "agent_id": None, "assistant_line": line(FREE, "Free")},
-    # This tool's own account key: account-wide, so it resolves to no line and
-    # must not make every line look taken.
-    {"id": 44, "key_prefix": None, "is_active": True, "agent_id": None, "assistant_line": None},
+    {"id": 33, "key_prefix": "free3333", "is_active": False, "assistant_uid": "ast_old", "assistant_provider": "self_hosted"},
+    # This tool's own account key: no assistant, and it must not make every
+    # line look taken.
+    {"id": 44, "key_prefix": None, "is_active": True, "assistant_uid": None, "assistant_provider": None},
     # An unparseable credential must not match an empty published prefix.
-    {"id": 7, "key_prefix": "", "is_active": True, "agent_id": None, "assistant_line": None},
+    {"id": 7, "key_prefix": "", "is_active": True, "assistant_uid": None, "assistant_provider": None},
+]
+
+# `GET /v1/assistants` is the line -> assistant mapping now. Every live line
+# appears, free ones included, which is what makes `ln_free` read `free`
+# rather than being absent.
+SLOTS = [
+    {"line": line(FREE, "Free"), "assistant": None},
+    {"line": line(CLOUD, "Cloud"), "assistant": {"uid": "ast_7f3", "provider": "exe:hermes"}},
+    {"line": line(LOCAL, "Local"), "assistant": {"uid": "ast_loc", "provider": "self_hosted"}},
 ]
 
 
@@ -66,6 +76,8 @@ class Stub(BaseHTTPRequestHandler):
         Stub.requests.append(f"GET {self.path}")
         if self.path == "/v1/chats":
             return self._send(200, Stub.chats)
+        if self.path == "/v1/assistants":
+            return self._send(200, SLOTS)
         if self.path == "/v1/api-keys":
             return self._send(200, KEYS)
         if self.path == "/v1/auth/profile":
@@ -210,7 +222,7 @@ def main() -> int:
         check("lines labels its columns", listed.stdout.splitlines()[0], "LINE\tNAME\tNUMBER\tSTATUS")
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
         check("a line nobody answers on reads free", rows.get(FREE), "free")
-        check("a cloud agent's line names its agent", rows.get(CLOUD), "cloud agt_7f3")
+        check("a cloud assistant's line names its assistant", rows.get(CLOUD), "cloud ast_7f3")
         check("a self-hosted agent's line names its key", rows.get(LOCAL), "local 22")
 
         legacy = run("revoke", f"line:{LOCAL}", cwd=work, base=base, token=token)
@@ -237,7 +249,7 @@ def main() -> int:
 
         refused = run("mint", CLOUD, cwd=work, base=base, token=token)
         check("mint refuses an occupied line", refused.returncode, 1)
-        check("and names who holds it", "cloud agt_7f3" in refused.stderr, True)
+        check("and names who holds it", "cloud ast_7f3" in refused.stderr, True)
         check("and writes nothing", os.path.exists(os.path.join(work, "plow-credentials")), False)
         check("and mints nothing", Stub.minted, [])
 
@@ -259,8 +271,13 @@ def main() -> int:
         cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
         check("revoke refuses a cloud-held line", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr and Stub.revoked == before, True)
 
-        KEYS.append({"id": 23, "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")})
+        # Two assistants on one line. A slot list should never say this, so
+        # the guard is defending against an API that contradicts its own shape
+        # rather than an ordinary state -- which is why it is asserted here.
+        KEYS.append({"id": 23, "key_prefix": "second22", "is_active": True, "assistant_uid": "ast_two", "assistant_provider": "self_hosted"})
+        SLOTS.append({"line": line(LOCAL, "Local"), "assistant": {"uid": "ast_two", "provider": "self_hosted"}})
         ambiguous = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        SLOTS.pop()
         KEYS.pop()
         check("revoke refuses ambiguous local holders", ambiguous.returncode != 0 and "2 active holders" in ambiguous.stderr and Stub.revoked == before, True)
 

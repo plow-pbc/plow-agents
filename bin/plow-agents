@@ -187,6 +187,9 @@ def account_token(args: argparse.Namespace) -> str:
 # --- verbs -----------------------------------------------------------------
 
 
+SELF_HOSTED = "self_hosted"
+
+
 def account_lines(chats: object) -> dict[str, tuple[str, str]]:
     """The assistant lines a GET /v1/chats body shows, uid -> (name, number).
 
@@ -201,27 +204,33 @@ def account_lines(chats: object) -> dict[str, tuple[str, str]]:
     return seen
 
 
-def line_holders(keys: object) -> dict[str, list[tuple[str, str]]]:
+def line_holders(slots: object, keys: object) -> dict[str, list[tuple[str, str]]]:
     """Who is already answering on each line, uid -> [(kind, id)].
 
-    One call answers it. A key carries both the line its grant resolves to and
-    the cloud agent it belongs to, so a cloud agent needs no second lookup --
-    `GET /v1/agents/cloud` publishes no line at all, only the agent.
+    `GET /v1/assistants` is the mapping: a slot is a line and the assistant on
+    it, or `None` when that line is free. A key no longer publishes its line at
+    all -- plow #1732 replaced `assistant_line` with a bare `assistant_uid` --
+    so the keys are read only to name the credential behind a self-hosted
+    assistant, which is what `revoke --line` needs an id for.
 
-    A key whose grant does not resolve to one line -- an account-wide one, this
-    tool's own included -- has no `assistant_line` and so holds nothing here.
-    That is the question being asked: not who *could* write to the line, but who
-    is an assistant on it.
+    A line with no assistant holds nothing here. That is the question being
+    asked: not who *could* write to the line, but who is an assistant on it.
     """
-    holders: dict[str, list[tuple[str, str]]] = {}
+    local_keys: dict[str, str] = {}
     for key in keys if isinstance(keys, list) else []:
-        line = key.get("assistant_line") or {}
-        if not line.get("uid") or not key.get("is_active"):
+        if key.get("is_active") and key.get("assistant_uid"):
+            local_keys.setdefault(str(key["assistant_uid"]), str(key["id"]))
+    holders: dict[str, list[tuple[str, str]]] = {}
+    for slot in slots if isinstance(slots, list) else []:
+        line, assistant = slot.get("line") or {}, slot.get("assistant")
+        if not line.get("uid") or not assistant or not assistant.get("uid"):
             continue
-        agent_uid = key.get("agent_id")
-        holders.setdefault(line["uid"], []).append(
-            ("cloud", str(agent_uid)) if agent_uid else ("local", str(key["id"]))
-        )
+        uid = str(assistant["uid"])
+        # A cloud assistant is named by its own uid, which is what DELETE
+        # /v1/assistants/{uid} takes. A self-hosted one is a credential, and
+        # the key id is what revokes it.
+        holder = ("local", local_keys[uid]) if assistant.get("provider") == SELF_HOSTED and uid in local_keys else ("cloud", uid)
+        holders.setdefault(line["uid"], []).append(holder)
     return holders
 
 
@@ -274,7 +283,10 @@ def lines(args: argparse.Namespace) -> None:
         log("No assistant lines on this account yet.")
         log("Run `plow-agents login --new-line` to be given one.")
         return
-    holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
+    holders = line_holders(
+        call("GET", args.api_base, "/v1/assistants", token=token),
+        call("GET", args.api_base, "/v1/api-keys", token=token),
+    )
     print("LINE\tNAME\tNUMBER\tSTATUS")
     for uid, (name, number) in sorted(seen.items()):
         status = ", ".join(format_holder(holder) for holder in holders.get(uid, [])) or "free"
@@ -400,7 +412,8 @@ def mint(args: argparse.Namespace) -> None:
     # below, which would otherwise retire a working credential on the way to a
     # refusal. The key this file already names is not a conflict: re-minting
     # over it is the ordinary rotation, and it is retired two lines down.
-    held = [holder for holder in line_holders(keys).get(line_uid, []) if holder != ("local", superseded)]
+    slots = call("GET", args.api_base, "/v1/assistants", token=account)
+    held = [holder for holder in line_holders(slots, keys).get(line_uid, []) if holder != ("local", superseded)]
     if held:
         names = ", ".join(format_holder(holder) for holder in held)
         die(f"line:{line_uid} is already answering as {names} -- revoke that one first")
@@ -433,7 +446,8 @@ def revoke(args: argparse.Namespace) -> None:
     keys = call("GET", args.api_base, "/v1/api-keys", token=account)
     if args.line:
         line_uid = args.line
-        holders = line_holders(keys).get(line_uid, [])
+        slots = call("GET", args.api_base, "/v1/assistants", token=account)
+        holders = line_holders(slots, keys).get(line_uid, [])
         if len(holders) != 1:
             die(f"line:{line_uid} has {len(holders)} active holders -- expected exactly one local credential")
         kind, key_id = holders[0]
