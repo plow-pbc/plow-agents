@@ -387,7 +387,7 @@ def mint(args: argparse.Namespace) -> None:
     if os.path.isdir(destination):
         die(
             f"{destination} is a directory -- run `docker compose down -v && "
-            "rmdir plow-credentials`, then mint again"
+            f"rmdir {destination}`, then mint again"
         )
     account = account_token(args)
     keys = call("GET", args.api_base, "/v1/api-keys", token=account)
@@ -421,7 +421,14 @@ def mint(args: argparse.Namespace) -> None:
     if any(character in token for character in "\r\n\"\\"):
         die("the minted token carries quote or newline characters")
     credential = f"PLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
-    written = write_private(destination, credential)
+    try:
+        written = write_private(destination, credential)
+    except BaseException:
+        # The token is one-time, so a key that never reaches a file is a key
+        # nothing on this machine can ever name -- exactly what the revoke above
+        # exists to prevent. Retire it and re-raise: no credential, loudly.
+        revoke_key(args, key_id, account)
+        raise
     log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
     log(f"Wrote {written} (mode 600).")
 

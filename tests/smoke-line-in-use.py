@@ -217,11 +217,12 @@ def main() -> int:
         legacy = run("revoke", f"line:{LOCAL}", cwd=work, base=base, token=token)
         check("legacy line-prefixed input is not normalized", legacy.returncode != 0 and "0 active holders" in legacy.stderr, True)
 
-        os.mkdir(os.path.join(work, "plow-credentials"))
+        occupied = os.path.join(work, "plow-credentials")
+        os.mkdir(occupied)
         before_posts = list(Stub.posts)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
         check("mint refuses a credential directory", directory.returncode, 1)
-        check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
+        check("and prints the recovery command", f"docker compose down -v && rmdir {occupied}" in directory.stderr, True)
         check("and sends no POST", Stub.posts, before_posts)
         os.rmdir(os.path.join(work, "plow-credentials"))
 
@@ -259,6 +260,16 @@ def main() -> int:
         check("and writes the token", "\nPLOW_AGENT_TOKEN=" in body, True)
         check("and the file is mode 600", stat.S_IMODE(os.stat(destination).st_mode), 0o600)
         check("and the cwd default is not also written", os.path.exists(os.path.join(custom_cwd, "plow-credentials")), False)
+
+        # The minted token is one-time: a key that never reaches a file is a key
+        # nothing can name, so a failed install must not leave it live.
+        blocker = os.path.join(work, "blocker")
+        with open(blocker, "w") as handle:
+            handle.write("a file where a parent directory would go\n")
+        seen = len(Stub.revoked)
+        stranded = run("mint", FREE, "--credential-file", os.path.join(blocker, "creds"), cwd=work, base=base, token=token)
+        check("mint fails when the destination cannot be written", stranded.returncode != 0, True)
+        check("and the key it just minted was revoked", "99" in Stub.revoked[seen:], True)
 
         # Re-minting the line this directory's own credential already holds is
         # rotation, not a second agent -- key 22 is `local 22` on that line and
