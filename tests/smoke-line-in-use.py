@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -245,6 +246,19 @@ def main() -> int:
         check("a free line mints", free.returncode, 0)
         check("and writes the credential", os.path.exists(os.path.join(work, "plow-credentials")), True)
         check("mint does not prescribe a Compose command", "docker compose" in free.stderr, False)
+
+        # --credential-file decides where the credential lands, not the cwd.
+        custom_cwd = os.path.join(work, "custom-dest")
+        os.mkdir(custom_cwd)
+        destination = os.path.join(work, "nested", "plow-credentials-str")
+        named = run("mint", FREE, "--credential-file", destination, cwd=custom_cwd, base=base, token=token)
+        check("mint --credential-file exits 0", named.returncode, 0)
+        with open(destination) as handle:
+            body = handle.read()
+        check("and writes the API base", body.startswith("PLOW_API_BASE="), True)
+        check("and writes the token", "\nPLOW_AGENT_TOKEN=" in body, True)
+        check("and the file is mode 600", stat.S_IMODE(os.stat(destination).st_mode), 0o600)
+        check("and the cwd default is not also written", os.path.exists(os.path.join(custom_cwd, "plow-credentials")), False)
 
         # Re-minting the line this directory's own credential already holds is
         # rotation, not a second agent -- key 22 is `local 22` on that line and
