@@ -241,6 +241,13 @@ def line_holders(slots: object, keys: object) -> dict[str, list[tuple[str, str]]
         if assistant.get("provider") == SELF_HOSTED:
             # The key id is what revokes one of these.
             found = [("local", key_id) for key_id in local_keys.get(uid, [])]
+        elif assistant.get("status") == "failed":
+            # "Nothing is running and nothing is authorised" -- a record of a
+            # provision, not an agent. The API replaces such a row on the next
+            # POST and on activation, so refusing the line here would be
+            # stricter than the server. `teardown` is NOT this case: something
+            # may still be running, and the API refuses a POST on it too.
+            found = []
         else:
             # Named by its own uid, which is what DELETE /v1/assistants/{uid} takes.
             found = [("cloud", uid)]

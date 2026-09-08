@@ -296,6 +296,29 @@ def main() -> int:
         matching = run("revoke", LOCAL, cwd=work, base=base, token=token)
         check("line revoke removes a file naming the revoked key", matching.returncode == 0 and not os.path.exists(os.path.join(work, "plow-credentials")), True)
 
+        # A cloud attempt that failed is a record, not an agent: the API says
+        # "nothing is running and nothing is authorised" and replaces the row
+        # on the next POST. `teardown` is the opposite -- something may still
+        # be running -- so only `failed` frees the line.
+        FAILED = "ln_fail"
+        Stub.chats = {"data": CHATS["data"] + [{"participants": [{"type": "agent", "line": line(FAILED, "Fail")}]}]}
+        SLOTS.append({"line": line(FAILED, "Fail"), "assistant": {"uid": "ast_bad", "provider": "exe:hermes", "status": "failed"}})
+        failed_row = run("lines", cwd=work, base=base, token=token)
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in failed_row.stdout.splitlines()}
+        check("a failed cloud attempt does not hold its line", rows.get(FAILED), "free")
+        retry = run("mint", FAILED, cwd=work, base=base, token=token)
+        check("and the line can still be minted", retry.returncode, 0)
+
+        SLOTS[-1]["assistant"]["status"] = "teardown"
+        stuck = run("lines", cwd=work, base=base, token=token)
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in stuck.stdout.splitlines()}
+        check("but an unfinished teardown still holds it", rows.get(FAILED), "cloud ast_bad")
+        SLOTS.pop()
+        Stub.chats = CHATS
+        # The retry above wrote a credential naming a key this stub does not
+        # publish; the next block mints again and would trip over it.
+        os.path.exists(os.path.join(work, "plow-credentials")) and os.unlink(os.path.join(work, "plow-credentials"))
+
         # mint -> revoke -> mint, the ordinary rotation, end to end.
         #
         # Revoking a self-hosted credential deactivates the session and leaves
