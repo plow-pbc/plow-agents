@@ -427,6 +427,9 @@ def mint(args: argparse.Namespace) -> None:
         # The token is one-time, so a key that never reaches a file is a key
         # nothing on this machine can ever name -- exactly what the revoke above
         # exists to prevent. Retire it and re-raise: no credential, loudly.
+        # Named first because a retire that dies takes this failure's message
+        # with it, and the key left behind is the part the operator must know.
+        log(f"Install to {destination} failed -- retiring key {key_id}.")
         revoke_key(args, key_id, account)
         raise
     log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
