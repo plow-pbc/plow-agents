@@ -149,7 +149,10 @@ def strip_v1(base: str) -> str:
     if not base or any(character in base for character in "\r\n\"\\"):
         die("API base must be nonempty and contain no quotes, backslashes, or newlines")
     base = base.rstrip("/")
-    return base[: -len("/v1")] if base.endswith("/v1") else base
+    base = base[: -len("/v1")] if base.endswith("/v1") else base
+    if not base:
+        die("API base must not be empty after normalization")
+    return base
 
 
 def token_path(override: str | None) -> str:
@@ -425,6 +428,11 @@ def main() -> int:
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
     args.api_base = strip_v1(args.api_base)
+    endpoint = urllib.parse.urlsplit(args.api_base)
+    host = endpoint.hostname or ""
+    local = host in ("localhost", "127.0.0.1", "::1") or host.endswith(".orb.local")
+    if not host or not (endpoint.scheme == "https" or endpoint.scheme == "http" and local):
+        die("--api-base requires HTTPS except for localhost, 127.0.0.1, ::1, or *.orb.local")
     # `--api-base` is where *this tool* calls; the credential says where the
     # *container* calls. The same address usually, but not against a local
     # stack: a 127.0.0.1 that works out here is the container's own loopback.

@@ -9,13 +9,17 @@ a local stub with `--api-base`.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import runpy
 import os
 import subprocess
 import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import patch
 
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
 
@@ -300,7 +304,7 @@ def main() -> int:
             os.unlink(credential)
         next(row for row in Stub.lines["data"] if row["uid"] == FREE)["agent_uid"] = None
         AGENTS.pop("d2e048a4cbefdc491657eaddc9c7657a", None)
-        for bad_base in ('http://container/"', 'http://container/\\', 'http://container/\n'):
+        for bad_base in ('http://container/"', 'http://container/\\', 'http://container/\n', '/', '/v1'):
             Stub.requests.clear()
             refused = run("mint", FREE, "--agent-api-base", bad_base, cwd=work, base=base, token=token)
             check("invalid container base is refused before mint POST", refused.returncode != 0 and not Stub.requests, True)
@@ -318,7 +322,28 @@ def main() -> int:
         Stub.requests.clear()
         refused = run("mint", FREE, cwd=work, base=base+'"', token=token)
         check("invalid host API base is refused without requests", refused.returncode != 0 and not Stub.requests, True)
-        check("no legacy key or chat routes called", any("api-keys" in req or "relay/agents" in req or "/v1/chats" in req for req in Stub.requests), False)
+        cli_main = runpy.run_path(CLI)["main"]
+        for root, permitted in (
+            ("https://api.example.com", True),
+            ("http://localhost:8000", True),
+            ("http://127.0.0.1:8000", True),
+            ("http://[::1]:8000", True),
+            ("http://api.orb.local:8000", True),
+            ("http://api.example.com", False),
+            ("http://localhost.example.com", False),
+            ("http://api.orb.local.example.com", False),
+            ("http://localhost@api.example.com", False),
+        ):
+            response = io.BytesIO(b'{"data": []}')
+            response.status = 200
+            argv = [CLI, "--api-base", root, "--token-file", token, "lines"]
+            with patch.object(sys, "argv", argv), patch("urllib.request.urlopen", return_value=response) as transport:
+                with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                    try:
+                        code = cli_main()
+                    except SystemExit as error:
+                        code = error.code
+            check(f"account token transport policy for {root}", (code == 0, transport.called), (permitted, permitted))
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("empty lines explain activation", "login --new-line" in empty.stderr, True)

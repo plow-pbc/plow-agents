@@ -162,6 +162,8 @@ image's docs.
 Most developers do not need the remaining CLI flags:
 
 - `--api-base` changes the API called by the CLI and goes before the verb.
+  It requires HTTPS; HTTP is allowed only for `localhost`, `127.0.0.1`, `::1`,
+  and `*.orb.local` development hosts.
 - `--token-file` selects a different account-token file.
 - `mint --agent-api-base` writes a different API root for the container. This is
   necessary when a local API is `127.0.0.1` on the host but must be reached as
