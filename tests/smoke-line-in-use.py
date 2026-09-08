@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`lines`, `mint`, and `revoke` against a stub API.
+"""`lines`, `mint`, `rotate`, and `revoke` against a stub API.
 
 Standard library only, no network, no Plow account: drive the real CLI against
 a local stub with `--api-base`.
@@ -27,25 +27,19 @@ def line(uid: str, name: str) -> dict:
     return {"uid": uid, "display_name": name, "provider_key": f"+1555{uid[-4:]}"}
 
 
-CHATS = {"data": [{"participants": [{"type": "agent", "line": line(uid, name)}]} for uid, name in ((FREE, "Free"), (CLOUD, "Cloud"), (LOCAL, "Local"))]}
-
-KEYS = [
-    # The cloud agent's credential: a line, and an agent_id naming its agent.
-    {"id": 11, "key_prefix": "cloud11", "is_active": True, "agent_id": "agt_7f3", "assistant_line": line(CLOUD, "Cloud")},
-    # A self-hosted one: the same shape, no agent behind it.
-    {"id": 22, "key_prefix": "local222", "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")},
-    # Revoked, on the line that must still read `free`.
-    {"id": 33, "key_prefix": "free3333", "is_active": False, "agent_id": None, "assistant_line": line(FREE, "Free")},
-    # This tool's own account key: account-wide, so it resolves to no line and
-    # must not make every line look taken.
-    {"id": 44, "key_prefix": None, "is_active": True, "agent_id": None, "assistant_line": None},
-    # An unparseable credential must not match an empty published prefix.
-    {"id": 7, "key_prefix": "", "is_active": True, "agent_id": None, "assistant_line": None},
-]
+LINES = {"data": [dict(line(uid, name), agent_uid=agent_uid) for uid, name, agent_uid in (
+    (FREE, "Free", None), (CLOUD, "Cloud", "agt_cloud"), (LOCAL, "Local", "agt_local"),
+)]}
+AGENTS = {
+    "agt_cloud": {"uid": "agt_cloud", "provider": "exe:life"},
+    "agt_local": {"uid": "agt_local", "provider": "local"},
+}
 
 
 class Stub(BaseHTTPRequestHandler):
-    chats: dict = CHATS
+    lines: dict = LINES
+    rotate_status = 200
+    delete_status = 200
     posts: list[str] = []
     minted: list[dict] = []
     revoked: list[str] = []
@@ -64,10 +58,11 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
         Stub.requests.append(f"GET {self.path}")
-        if self.path == "/v1/chats":
-            return self._send(200, Stub.chats)
-        if self.path == "/v1/api-keys":
-            return self._send(200, KEYS)
+        if self.path == "/v1/lines":
+            return self._send(200, Stub.lines)
+        if self.path.startswith("/v1/agents/"):
+            agent = AGENTS.get(self.path.rsplit("/", 1)[1])
+            return self._send(200 if agent else 404, agent)
         if self.path == "/v1/auth/profile":
             return self._send(Stub.profile_get_status, {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
         self._send(404, {"detail": self.path})
@@ -97,17 +92,33 @@ class Stub(BaseHTTPRequestHandler):
             Stub.photo_uploads.append(parts)
             name = parts["display_name"][1].decode() if "display_name" in parts else None
             return self._send(200, {"display_name": name, "photo_url": PHOTO_URL})
-        if self.path == "/v1/relay/agents":
+        if self.path == "/v1/agents":
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             Stub.minted.append(body)
-            return self._send(200, {"id": 99, "key_prefix": "minted99", "token": "plow_minted99_token", "scopes": ["chats:write", "relay:call"]})
+            selected = next(row for row in Stub.lines["data"] if row["uid"] == body["line_uid"])
+            if selected["agent_uid"]:
+                return self._send(409, {"detail": "line already has an agent"})
+            selected["agent_uid"] = "d2e048a4cbefdc491657eaddc9c7657a"
+            agent = {"uid": "d2e048a4cbefdc491657eaddc9c7657a", "name": body["name"], "provider": body["provider"],
+                     "credential": {"id": 99, "scopes": ["chats:use", "relay:call"]}}
+            AGENTS["d2e048a4cbefdc491657eaddc9c7657a"] = agent
+            return self._send(201, {"agent": agent, "token": "plow_minted99_token"})
+        if self.path == "/v1/agents/d2e048a4cbefdc491657eaddc9c7657a/credential":
+            return self._send(Stub.rotate_status, {"credential": {"id": 100}, "token": "plow_rotated100_token"})
         self._send(404, {"detail": self.path})
 
     def do_DELETE(self) -> None:  # noqa: N802
         Stub.requests.append(f"DELETE {self.path}")
-        if self.path.startswith("/v1/api-keys/"):
-            Stub.revoked.append(self.path.rsplit("/", 1)[1])
-            return self._send(200, {"status": "revoked", "id": self.path.rsplit("/", 1)[1]})
+        if self.path.startswith("/v1/agents/"):
+            if Stub.delete_status != 200:
+                return self._send(Stub.delete_status, {"detail": "delete failed"})
+            uid = self.path.rsplit("/", 1)[1]
+            Stub.revoked.append(uid)
+            AGENTS.pop(uid, None)
+            for row in Stub.lines["data"]:
+                if row["agent_uid"] == uid:
+                    row["agent_uid"] = None
+            return self._send(200, {"status": "deleted"})
         self._send(404, {"detail": self.path})
 
     def log_message(self, *_: object) -> None:
@@ -205,116 +216,69 @@ def main() -> int:
         check("profile show fails on a failed GET", failed_show.returncode != 0, True)
         Stub.profile_get_status = 200
 
+        Stub.requests.clear()
         listed = run("lines", cwd=work, base=base, token=token)
         check("lines exits 0", listed.returncode, 0)
-        check("lines labels its columns", listed.stdout.splitlines()[0], "LINE\tNAME\tNUMBER\tSTATUS")
+        check("lines needs only the lines resource", Stub.requests, ["GET /v1/lines"])
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
-        check("a line nobody answers on reads free", rows.get(FREE), "free")
-        check("a cloud agent's line names its agent", rows.get(CLOUD), "cloud agt_7f3")
-        check("a self-hosted agent's line names its key", rows.get(LOCAL), "local 22")
-
-        legacy = run("revoke", f"line:{LOCAL}", cwd=work, base=base, token=token)
-        check("legacy line-prefixed input is not normalized", legacy.returncode != 0 and "0 active holders" in legacy.stderr, True)
-
-        os.mkdir(os.path.join(work, "plow-credentials"))
-        before_posts = list(Stub.posts)
-        directory = run("mint", FREE, cwd=work, base=base, token=token)
-        check("mint refuses a credential directory", directory.returncode, 1)
-        check("and prints the recovery command", "docker compose down -v && rmdir plow-credentials" in directory.stderr, True)
-        check("and sends no POST", Stub.posts, before_posts)
-        os.rmdir(os.path.join(work, "plow-credentials"))
+        check("free line is free", rows.get(FREE), "free")
+        check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
+        check("local line names its agent", rows.get(LOCAL), "agt_local")
 
         credential = os.path.join(work, "plow-credentials")
-        with open(credential, "w") as handle:
-            handle.write("PLOW_API_BASE=x\n")
-        before_posts = list(Stub.posts)
-        before_revoked = list(Stub.revoked)
-        malformed_mint = run("mint", FREE, cwd=work, base=base, token=token)
-        check("mint refuses an unparseable credential", malformed_mint.returncode != 0 and "no valid agent token" in malformed_mint.stderr, True)
-        check("and sends no mint POST", Stub.posts, before_posts)
-        check("and revokes no empty-prefix key", Stub.revoked, before_revoked)
-        os.unlink(credential)
-
-        refused = run("mint", CLOUD, cwd=work, base=base, token=token)
-        check("mint refuses an occupied line", refused.returncode, 1)
-        check("and names who holds it", "cloud agt_7f3" in refused.stderr, True)
-        check("and writes nothing", os.path.exists(os.path.join(work, "plow-credentials")), False)
-        check("and mints nothing", Stub.minted, [])
-
-        free = run("mint", FREE, cwd=work, base=base, token=token)
-        check("a free line mints", free.returncode, 0)
-        check("and writes the credential", os.path.exists(os.path.join(work, "plow-credentials")), True)
-        check("mint does not prescribe a Compose command", "docker compose" in free.stderr, False)
-
-        # Re-minting the line this directory's own credential already holds is
-        # rotation, not a second agent -- key 22 is `local 22` on that line and
-        # must not refuse itself.
-        with open(os.path.join(work, "plow-credentials"), "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
-        rotated = run("mint", LOCAL, cwd=work, base=base, token=token)
-        check("rotating over this file's own key is not a conflict", rotated.returncode, 0)
-        check("and the key it replaced was revoked", "22" in Stub.revoked, True)
-
-        before = list(Stub.revoked)
-        cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
-        check("revoke refuses a cloud-held line", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr and Stub.revoked == before, True)
-
-        KEYS.append({"id": 23, "is_active": True, "agent_id": None, "assistant_line": line(LOCAL, "Local")})
-        ambiguous = run("revoke", LOCAL, cwd=work, base=base, token=token)
-        KEYS.pop()
-        check("revoke refuses ambiguous local holders", ambiguous.returncode != 0 and "2 active holders" in ambiguous.stderr and Stub.revoked == before, True)
-
-        with open(os.path.join(work, "plow-credentials"), "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_cloud111_token\n")
-        recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
-        check("revoke can recover the local key holding a line", recovered.returncode, 0)
-        check("and revoked that local key", Stub.revoked[-1], "22")
-        check("and preserves a file naming a different key", os.path.exists(os.path.join(work, "plow-credentials")) and "names key 11" in recovered.stderr, True)
-
-        with open(os.path.join(work, "plow-credentials"), "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_nomatch0_token\n")
-        unmatched_file = run("revoke", LOCAL, cwd=work, base=base, token=token)
-        check("line revoke tolerates an unmatched credential file", unmatched_file.returncode == 0 and os.path.exists(os.path.join(work, "plow-credentials")) and "does not identify one key" in unmatched_file.stderr, True)
-
-        with open(os.path.join(work, "plow-credentials"), "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
-        matching = run("revoke", LOCAL, cwd=work, base=base, token=token)
-        check("line revoke removes a file naming the revoked key", matching.returncode == 0 and not os.path.exists(os.path.join(work, "plow-credentials")), True)
-
-        Stub.chats = {"data": []}
+        os.mkdir(credential)
+        directory = run("mint", FREE, cwd=work, base=base, token=token)
+        check("credential directory has recovery instructions", directory.returncode != 0 and "rmdir plow-credentials" in directory.stderr, True)
+        os.rmdir(credential)
+        occupied = run("mint", CLOUD, cwd=work, base=base, token=token)
+        check("occupied line is refused without a file", occupied.returncode != 0 and not os.path.exists(credential), True)
+        minted = run("mint", FREE, "--agent-api-base", "http://host.docker.internal:8000", cwd=work, base=base, token=token)
+        check("mint succeeds", minted.returncode, 0)
+        check("mint creates a local agent", Stub.minted[-1] if Stub.minted else None, {"name": "plow-agent", "provider": "local", "line_uid": FREE})
+        if not os.path.isfile(credential):
+            failures.append("mint did not create credential file")
+        else:
+            with open(credential) as handle:
+                original = handle.read()
+            check("credential records agent identity", "PLOW_AGENT_UID=d2e048a4cbefdc491657eaddc9c7657a\n" in original, True)
+            check("credential has mode 600", os.stat(credential).st_mode & 0o777, 0o600)
+            check("mint never prints token", "plow_minted99_token" in minted.stdout + minted.stderr, False)
+            Stub.requests.clear()
+            repeated = run("mint", FREE, cwd=work, base=base, token=token)
+            check("re-mint directs to explicit rotation", repeated.returncode != 0 and "rotate" in repeated.stderr, True)
+            check("re-mint makes no requests", Stub.requests, [])
+            Stub.rotate_status = 500
+            failed = run("rotate", cwd=work, base=base, token=token)
+            with open(credential) as handle:
+                check("failed rotation preserves credential", failed.returncode != 0 and handle.read() == original, True)
+            Stub.rotate_status = 200
+            rotated = run("rotate", cwd=work, base=base, token=token)
+            check("rotation succeeds", rotated.returncode, 0)
+            with open(credential) as handle:
+                updated = handle.read()
+            check("rotation installs new token", "PLOW_AGENT_TOKEN=plow_rotated100_token\n" in updated, True)
+            check("rotation preserves container API base", "PLOW_API_BASE=http://host.docker.internal:8000\n" in updated, True)
+            check("rotation preserves identity", "PLOW_AGENT_UID=d2e048a4cbefdc491657eaddc9c7657a\n" in updated, True)
+            check("rotation never prints token", "plow_rotated100_token" in rotated.stdout + rotated.stderr, False)
+            check("rotation keeps mode 600", os.stat(credential).st_mode & 0o777, 0o600)
+            cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
+            check("line recovery refuses cloud agents", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr, True)
+            recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
+            check("line recovery retires its local agent", recovered.returncode == 0 and "agt_local" in Stub.revoked, True)
+            check("line recovery leaves a different credential", os.path.exists(credential), True)
+            Stub.delete_status = 500
+            failed = run("revoke", cwd=work, base=base, token=token)
+            check("failed revoke leaves credential", failed.returncode != 0 and os.path.exists(credential), True)
+            Stub.delete_status = 200
+            revoked = run("revoke", cwd=work, base=base, token=token)
+            check("revoke retires the agent", revoked.returncode == 0 and "d2e048a4cbefdc491657eaddc9c7657a" in Stub.revoked, True)
+            check("revoke removes credential", os.path.exists(credential), False)
+            listed = run("lines", cwd=work, base=base, token=token)
+            check("retired line is free", f"{FREE}\tFree\t+1555free\tfree" in listed.stdout, True)
+        check("no legacy key or chat routes called", any("api-keys" in req or "relay/agents" in req or "/v1/chats" in req for req in Stub.requests), False)
+        Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
-        check("an account with no line gets the activation command", "login --new-line" in empty.stderr, True)
-
-        with open(credential, "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_local222_token\n")
-        fake_bin = os.path.join(work, "bin")
-        os.mkdir(fake_bin)
-        docker_called = os.path.join(work, "docker-called")
-        docker = os.path.join(fake_bin, "docker")
-        with open(docker, "w") as handle:
-            handle.write(f"#!/bin/sh\n: > {docker_called!r}\nexit 99\n")
-        os.chmod(docker, 0o755)
-        revoked = run("revoke", cwd=work, base=base, token=token, env=dict(os.environ, PATH=fake_bin))
-        check("revoke exits 0", revoked.returncode, 0)
-        check("the matching key was revoked", Stub.revoked[-1], "22")
-        check("the credential file was removed", os.path.exists(credential), False)
-        check("docker was never invoked", os.path.exists(docker_called), False)
-
-        with open(credential, "w") as handle:
-            handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_nomatch0_token\n")
-        before = list(Stub.revoked)
-        unmatched = run("revoke", cwd=work, base=base, token=token)
-        check("a credential matching no key is refused", unmatched.returncode != 0 and "no key matches" in unmatched.stderr, True)
-        check("the unmatched credential remains", os.path.exists(credential), True)
-        check("and no key was revoked", Stub.revoked, before)
-
-        with open(credential, "w") as handle:
-            handle.write("PLOW_API_BASE=x\n")
-        before = list(Stub.revoked)
-        unparseable = run("revoke", cwd=work, base=base, token=token)
-        check("an unparseable credential cannot match an empty prefix", unparseable.returncode != 0 and "no valid agent token" in unparseable.stderr, True)
-        check("the unparseable credential remains", os.path.exists(credential), True)
-        check("and the empty-prefix key was not revoked", Stub.revoked, before)
+        check("empty lines explain activation", "login --new-line" in empty.stderr, True)
 
     server.shutdown()
     for failure in failures:

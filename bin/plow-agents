@@ -7,10 +7,11 @@
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
     plow-agents profile          set or show this account's public profile (--photo takes a file)
-    plow-agents revoke [line]    revoke a local credential by file or line
+    plow-agents rotate           replace this local agent's credential
+    plow-agents revoke [line]    retire a local agent by file or line
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
-revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
+rotate, revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
 container. `mint` uses it for an AGENT credential scoped to one line, and that
 second one is the only credential a container ever sees.
 """
@@ -118,45 +119,27 @@ def write_private(path: str, body: str) -> str:
     return destination
 
 
-def credential_key_id(path: str, keys: object, *, tolerate_unmatched: bool = False) -> str | None:
-    """Find the one API key whose published prefix matches this credential."""
+def read_credential(path: str) -> dict[str, str]:
+    """Read the local agent identity and its container's API address."""
     try:
         with open(path) as handle:
-            content = handle.read()
-    except OSError:
-        return None
-    tokens = [line.split("=", 1)[1] for line in content.splitlines() if line.startswith("PLOW_AGENT_TOKEN=")]
-    token = tokens[0] if len(tokens) == 1 and tokens[0].startswith("plow_") else ""
-    prefix = token[5:13]
-    if not prefix:
-        if tolerate_unmatched:
-            return ""
-        die(f"no valid agent token in {path} -- revoke it in the Plow dashboard and delete the file")
-    # Plow auth.py derives KeyInfo.key_prefix from the same slice of the token.
-    matches = [
-        str(key["id"])
-        for key in (keys if isinstance(keys, list) else [])
-        if (key_prefix := key.get("key_prefix")) and token[5:5 + len(key_prefix)] == key_prefix
-    ]
-    if not matches:
-        if tolerate_unmatched:
-            return ""
-        die(f"no key matches the token in {path} -- revoke it in the Plow dashboard and delete the file")
-    if len(matches) > 1:
-        if tolerate_unmatched:
-            return ""
-        die(f"more than one key matches the token in {path} -- revoke in the Plow dashboard")
-    return matches[0]
+            return dict(line.rstrip("\n").split("=", 1) for line in handle if "=" in line)
+    except FileNotFoundError:
+        return {}
 
 
-def revoke_key(args: argparse.Namespace, key_id: str, token: str) -> None:
-    """Retire one key. A key Plow no longer knows is the state we were after."""
-    status, payload = request("DELETE", args.api_base + f"/v1/api-keys/{key_id}", token=token)
-    if status == 404:
-        return
-    if status // 100 != 2:
-        detail = payload.get("detail") if isinstance(payload, dict) else None
-        die(f"could not revoke key {key_id}: {status}" + (f": {detail}" if detail else ""))
+def credential_agent_uid(credential: dict[str, str]) -> str:
+    uid = credential.get("PLOW_AGENT_UID", "")
+    if not uid:
+        die("no valid PLOW_AGENT_UID in plow-credentials -- use `revoke <line>` to retire the agent")
+    return uid
+
+
+def install_credential(uid: str, token: str, base: str) -> None:
+    if any(character in token + base + uid for character in "\r\n\"\\"):
+        die("the credential carries quote or newline characters")
+    written = write_private(CREDENTIAL_FILE, f"PLOW_API_BASE={base}\nPLOW_AGENT_TOKEN={token}\nPLOW_AGENT_UID={uid}\n")
+    log(f"Wrote {written} (mode 600).")
 
 
 def strip_v1(base: str) -> str:
@@ -185,48 +168,6 @@ def account_token(args: argparse.Namespace) -> str:
 
 
 # --- verbs -----------------------------------------------------------------
-
-
-def account_lines(chats: object) -> dict[str, tuple[str, str]]:
-    """The assistant lines a GET /v1/chats body shows, uid -> (name, number).
-
-    A line is not listed in its own right: it is the identity the agent side of
-    a chat answers on, so the chats are where to read one off."""
-    seen: dict[str, tuple[str, str]] = {}
-    for chat in chats.get("data", []) if isinstance(chats, dict) else []:
-        for participant in chat.get("participants", []):
-            line = participant.get("line") if participant.get("type") == "agent" else None
-            if isinstance(line, dict) and line.get("uid"):
-                seen.setdefault(line["uid"], (line.get("display_name") or "", line.get("provider_key") or ""))
-    return seen
-
-
-def line_holders(keys: object) -> dict[str, list[tuple[str, str]]]:
-    """Who is already answering on each line, uid -> [(kind, id)].
-
-    One call answers it. A key carries both the line its grant resolves to and
-    the cloud agent it belongs to, so a cloud agent needs no second lookup --
-    `GET /v1/agents/cloud` publishes no line at all, only the agent.
-
-    A key whose grant does not resolve to one line -- an account-wide one, this
-    tool's own included -- has no `assistant_line` and so holds nothing here.
-    That is the question being asked: not who *could* write to the line, but who
-    is an assistant on it.
-    """
-    holders: dict[str, list[tuple[str, str]]] = {}
-    for key in keys if isinstance(keys, list) else []:
-        line = key.get("assistant_line") or {}
-        if not line.get("uid") or not key.get("is_active"):
-            continue
-        agent_uid = key.get("agent_id")
-        holders.setdefault(line["uid"], []).append(
-            ("cloud", str(agent_uid)) if agent_uid else ("local", str(key["id"]))
-        )
-    return holders
-
-
-def format_holder(holder: tuple[str, str]) -> str:
-    return f"{holder[0]} {holder[1]}"
 
 
 def login(args: argparse.Namespace) -> None:
@@ -259,8 +200,8 @@ def login(args: argparse.Namespace) -> None:
             # Now that a token is in hand, this account can be asked about
             # itself -- and `mint` has nothing to scope a credential to
             # without a line, so say so here rather than two verbs later.
-            status, body = request("GET", args.api_base + "/v1/chats", token=token)
-            if status // 100 == 2 and not account_lines(body):
+            status, body = request("GET", args.api_base + "/v1/lines", token=token)
+            if status // 100 == 2 and not body["data"]:
                 log("This account holds no assistant line yet: run `plow-agents login --new-line` to be given one.")
             return
         time.sleep(POLL_S)
@@ -269,16 +210,15 @@ def login(args: argparse.Namespace) -> None:
 
 def lines(args: argparse.Namespace) -> None:
     token = account_token(args)
-    seen = account_lines(call("GET", args.api_base, "/v1/chats", token=token))
-    if not seen:
+    available = call("GET", args.api_base, "/v1/lines", token=token)["data"]
+    if not available:
         log("No assistant lines on this account yet.")
         log("Run `plow-agents login --new-line` to be given one.")
         return
-    holders = line_holders(call("GET", args.api_base, "/v1/api-keys", token=token))
     print("LINE\tNAME\tNUMBER\tSTATUS")
-    for uid, (name, number) in sorted(seen.items()):
-        status = ", ".join(format_holder(holder) for holder in holders.get(uid, [])) or "free"
-        print(f"{uid}\t{name}\t{number}\t{status}")
+    for line in sorted(available, key=lambda line: line["uid"]):
+        status = line["agent_uid"] or "free"
+        print(f"{line['uid']}\t{line.get('display_name') or ''}\t{line.get('provider_key') or ''}\t{status}")
 
 
 def is_hosted_url(value: str) -> bool:
@@ -389,76 +329,56 @@ def mint(args: argparse.Namespace) -> None:
             f"{destination} is a directory -- run `docker compose down -v && "
             "rmdir plow-credentials`, then mint again"
         )
+    if os.path.exists(destination):
+        die(f"{destination} already exists -- use `plow-agents rotate` or revoke the agent first")
     account = account_token(args)
-    keys = call("GET", args.api_base, "/v1/api-keys", token=account)
-    # Writing over a credential without retiring its key would leave a live
-    # token no file on this machine names. So the old key goes first -- read
-    # before anything can fail, revoked as late as possible before the new one.
-    superseded = credential_key_id(destination, keys)
-    # Two agents on one line both answer, and the owner cannot tell which. So
-    # the line is checked before anything is written -- and before the revoke
-    # below, which would otherwise retire a working credential on the way to a
-    # refusal. The key this file already names is not a conflict: re-minting
-    # over it is the ordinary rotation, and it is retired two lines down.
-    held = [holder for holder in line_holders(keys).get(line_uid, []) if holder != ("local", superseded)]
-    if held:
-        names = ", ".join(format_holder(holder) for holder in held)
-        die(f"line:{line_uid} is already answering as {names} -- revoke that one first")
-    if superseded is not None:
-        revoke_key(args, superseded, account)
-        log(f"Revoked key {superseded}, the one {destination} named.")
-    # The agent's scopes are the server's to decide, not this tool's: naming a
-    # line here asks for the assistant role, and asking for it by scope list on
-    # /v1/api-keys is how a self-hosted agent ends up with a grant that covers
-    # today's threads on the number but not tomorrow's.
-    body = {"name": "plow-agent", "line_uid": line_uid}
-    minted = call("POST", args.api_base, "/v1/relay/agents", token=account, body=body)
-    token, key_id = minted.get("token"), minted.get("id")
-    if not token or key_id is None:
-        die("the mint returned no token or no id")
-    scopes = minted.get("scopes") or []
-    # A token carrying these would break out of its own line in the file below.
-    if any(character in token for character in "\r\n\"\\"):
-        die("the minted token carries quote or newline characters")
-    credential = f"PLOW_API_BASE={args.agent_api_base}\nPLOW_AGENT_TOKEN={token}\n"
-    written = write_private(destination, credential)
-    log(f"Minted key {key_id} for line:{line_uid}, scoped to {' '.join(scopes)}.")
-    log(f"Wrote {written} (mode 600).")
+    minted = call("POST", args.api_base, "/v1/agents", token=account,
+                  body={"name": "plow-agent", "provider": "local", "line_uid": line_uid})
+    agent, token = minted["agent"], minted["token"]
+    if not token:
+        die("the local agent create returned no token")
+    install_credential(agent["uid"], token, args.agent_api_base)
+    log(f"Created agent {agent['uid']} for line:{line_uid}.")
+
+
+def rotate(args: argparse.Namespace) -> None:
+    credential = read_credential(CREDENTIAL_FILE)
+    uid = credential_agent_uid(credential)
+    base = args.agent_api_base or credential.get("PLOW_API_BASE")
+    if not base:
+        die("no PLOW_API_BASE in plow-credentials -- pass --agent-api-base")
+    rotated = call("POST", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}/credential", token=account_token(args))
+    if not rotated["token"]:
+        die("rotation returned no local token")
+    install_credential(uid, rotated["token"], base)
+    log(f"Rotated agent {uid}. Recreate its container to load the new credential.")
 
 
 def revoke(args: argparse.Namespace) -> None:
-    """Revoke the credential file's key, or recover one local key by line."""
+    """Retire this file's agent, or recover a local agent by line."""
     path = os.path.abspath(CREDENTIAL_FILE)
+    credential = read_credential(path)
     account = account_token(args)
-    keys = call("GET", args.api_base, "/v1/api-keys", token=account)
     if args.line:
-        line_uid = args.line
-        holders = line_holders(keys).get(line_uid, [])
-        if len(holders) != 1:
-            die(f"line:{line_uid} has {len(holders)} active holders -- expected exactly one local credential")
-        kind, key_id = holders[0]
-        if kind != "local":
-            die(f"line:{line_uid} is held by {format_holder(holders[0])} -- delete that agent in Plow")
+        available = call("GET", args.api_base, "/v1/lines", token=account)["data"]
+        uid = next((line["agent_uid"] for line in available if line["uid"] == args.line), None)
+        if not uid:
+            die(f"line:{args.line} has no agent")
+        agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
+        if agent["provider"] != "local":
+            die(f"line:{args.line} is held by {uid} -- delete that agent in Plow")
     else:
-        key_id = credential_key_id(path, keys)
-        if key_id is None:
-            die(f"no credential file at {path}")
-    revoke_key(args, key_id, account)
-    log(f"Revoked key {key_id}.")
-    if args.line:
-        file_key_id = credential_key_id(path, keys, tolerate_unmatched=True)
-        if file_key_id is None:
-            return
-        if not file_key_id:
-            log(f"Left {path} in place: its token does not identify one key.")
-            return
-        if file_key_id != key_id:
-            log(f"Left {path} in place: it names key {file_key_id}, not the revoked key {key_id}.")
-            return
+        uid = credential_agent_uid(credential)
+    call("DELETE", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
+    log(f"Retired agent {uid}.")
+    if credential.get("PLOW_AGENT_UID") != uid:
+        if credential:
+            log(f"Left {path} in place: it does not name agent {uid}.")
+        return
     try:
         os.unlink(path)
     except OSError as error:
-        log(f"{path} could not be removed ({error}). It names a dead key; delete it yourself.")
+        log(f"{path} could not be removed ({error}). It names a retired agent; delete it yourself.")
         raise SystemExit(2)
     log(f"Removed {path}.")
 
@@ -486,8 +406,12 @@ def main() -> int:
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
-    it = verbs.add_parser("revoke", help="revoke ./plow-credentials, or one local credential by line")
-    it.add_argument("line", nargs="?", help="line uid whose sole local credential should be revoked")
+    it = verbs.add_parser("rotate", help="replace this agent's credential in ./plow-credentials")
+    it.add_argument("--agent-api-base", default=None, help="override the container API root (default: preserve the credential file's root)")
+    it.set_defaults(run=rotate)
+
+    it = verbs.add_parser("revoke", help="retire the local agent in ./plow-credentials, or by line")
+    it.add_argument("line", nargs="?", help="line uid whose local agent should be retired")
     it.set_defaults(run=revoke)
 
     args = parser.parse_args()
@@ -497,7 +421,7 @@ def main() -> int:
     # *container* calls. The same address usually, but not against a local
     # stack: a 127.0.0.1 that works out here is the container's own loopback.
     if getattr(args, "agent_api_base", None) is None:
-        args.agent_api_base = args.api_base
+        args.agent_api_base = None if args.verb == "rotate" else args.api_base
     else:
         args.agent_api_base = strip_v1(args.agent_api_base)
     args.run(args)
