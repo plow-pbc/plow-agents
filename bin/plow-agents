@@ -145,7 +145,9 @@ def install_credential(uid: str, token: str, base: str) -> None:
 
 
 def strip_v1(base: str) -> str:
-    """An API root the agent can append its own `/v1` to."""
+    """Validate an API root before requests, then remove an optional `/v1`."""
+    if not base or any(character in base for character in "\r\n\"\\"):
+        die("API base must be nonempty and contain no quotes, backslashes, or newlines")
     base = base.rstrip("/")
     return base[: -len("/v1")] if base.endswith("/v1") else base
 
@@ -332,7 +334,7 @@ def mint(args: argparse.Namespace) -> None:
             "rmdir plow-credentials`, then mint again"
         )
     if os.path.exists(destination):
-        die(f"{destination} already exists -- use `plow-agents rotate`, or `plow-agents revoke <line>` to retire the agent and remove this file")
+        die(f"{destination} already exists -- use `plow-agents rotate`, or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
     account = account_token(args)
     minted = call("POST", args.api_base, "/v1/agents", token=account,
                   body={"name": "plow-agent", "provider": "local", "line_uid": line_uid})
@@ -346,9 +348,7 @@ def mint(args: argparse.Namespace) -> None:
 def rotate(args: argparse.Namespace) -> None:
     credential = read_credential(CREDENTIAL_FILE)
     uid = credential_agent_uid(credential)
-    base = args.agent_api_base or credential.get("PLOW_API_BASE")
-    if not base:
-        die("no PLOW_API_BASE in plow-credentials -- pass --agent-api-base")
+    base = strip_v1(credential.get("PLOW_API_BASE", ""))
     rotated = call("POST", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}/credential", token=account_token(args))
     if not rotated["token"]:
         die("rotation returned no local token")
@@ -367,20 +367,20 @@ def revoke(args: argparse.Namespace) -> None:
         if line is None:
             die(f"unknown line:{args.line}")
         uid = line["agent_uid"]
-        if uid:
-            agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
-            if agent["provider"] != "local":
-                die(f"line:{args.line} is held by {uid} -- delete that agent in Plow")
+        if not uid:
+            die(f"line:{args.line} has no agent -- left {path} untouched")
+        agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
+        if agent["provider"] != "local":
+            die(f"line:{args.line} is held by {uid} -- delete that agent in Plow")
     else:
         uid = credential_agent_uid(credential)
-    if uid:
-        call("DELETE", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
-        log(f"Retired agent {uid}.")
-    else:
-        log(f"line:{args.line} has no agent.")
-    file_uid = credential.get("PLOW_AGENT_UID")
-    if file_uid and file_uid != uid:
-        log(f"Left {path} in place: it names a different agent ({file_uid}).")
+    status, _ = request("DELETE", args.api_base + f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
+    if status // 100 != 2 and status != 404:
+        die(f"could not retire agent {uid}: HTTP {status}")
+    log(f"Retired agent {uid}.")
+    if credential.get("PLOW_AGENT_UID") != uid:
+        if os.path.exists(path):
+            log(f"Left {path} in place: it does not name agent {uid}. Remove it manually only after confirming its ownership.")
         return
     if not os.path.exists(path):
         return
@@ -416,7 +416,6 @@ def main() -> int:
     it.set_defaults(run=mint)
 
     it = verbs.add_parser("rotate", help="replace this agent's credential in ./plow-credentials")
-    it.add_argument("--agent-api-base", default=None, help="override the container API root (default: preserve the credential file's root)")
     it.set_defaults(run=rotate)
 
     it = verbs.add_parser("revoke", help="retire the local agent in ./plow-credentials, or by line")
@@ -429,10 +428,8 @@ def main() -> int:
     # `--api-base` is where *this tool* calls; the credential says where the
     # *container* calls. The same address usually, but not against a local
     # stack: a 127.0.0.1 that works out here is the container's own loopback.
-    if getattr(args, "agent_api_base", None) is None:
-        args.agent_api_base = None if args.verb == "rotate" else args.api_base
-    else:
-        args.agent_api_base = strip_v1(args.agent_api_base)
+    if args.verb == "mint":
+        args.agent_api_base = strip_v1(args.agent_api_base) if args.agent_api_base is not None else args.api_base
     args.run(args)
     return 0
 

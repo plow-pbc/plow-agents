@@ -124,9 +124,10 @@ build cache, and chat history remain; the agent credential and local agent state
 do not.
 
 If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
-local agent holding that line. It refuses a cloud agent. Once the line has no
-agent, it also removes an old credential file without `PLOW_AGENT_UID`, allowing
-a fresh `mint`. A file naming a different agent stays in place.
+local agent holding that line. It refuses a cloud agent. It removes the credential file only when `PLOW_AGENT_UID` matches the retired
+agent. A legacy file without that UID, or one naming another agent, stays in
+place: confirm which agent it belongs to before removing it manually. Revoking
+a free line fails without touching the file.
 
 Mint before the first `docker compose up`. If Docker was started first, it
 created `./plow-credentials` as an empty directory; recover with: `docker compose down -v && rmdir plow-credentials`. Then mint.
@@ -162,7 +163,7 @@ Most developers do not need the remaining CLI flags:
 
 - `--api-base` changes the API called by the CLI and goes before the verb.
 - `--token-file` selects a different account-token file.
-- `mint --agent-api-base` (also available on `rotate`) writes a different API root for the container. This is
+- `mint --agent-api-base` writes a different API root for the container. This is
   necessary when a local API is `127.0.0.1` on the host but must be reached as
   `host.docker.internal` from Docker.
 

@@ -277,24 +277,47 @@ def main() -> int:
             check("revoke removes credential", os.path.exists(credential), False)
             listed = run("lines", cwd=work, base=base, token=token)
             check("retired line is free", f"{FREE}\tFree\t+1555free\tfree" in listed.stdout, True)
-        for already_retired in (False, True):
-            created = run("mint", FREE, cwd=work, base=base, token=token)
-            check("create agent for legacy-file recovery", created.returncode, 0)
-            if already_retired:
-                retired = run("revoke", cwd=work, base=base, token=token)
-                check("retire agent before recovering stale file", retired.returncode, 0)
-            with open(credential, "w") as handle:
-                handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_legacy_token\n")
-            if not already_retired:
-                Stub.delete_status = 500
-                failed = run("revoke", FREE, cwd=work, base=base, token=token)
-                check("failed line revoke preserves legacy file", failed.returncode != 0 and os.path.exists(credential), True)
-                Stub.delete_status = 200
-            recovered = run("revoke", FREE, cwd=work, base=base, token=token)
-            check(f"line revoke removes file naming no agent (already retired={already_retired})",
-                  recovered.returncode == 0 and not os.path.exists(credential), True)
-            if os.path.exists(credential):
+        legacy = "PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_legacy_token\n"
+        with open(credential, "w") as handle:
+            handle.write(legacy)
+        free_revoke = run("revoke", FREE, cwd=work, base=base, token=token)
+        check("free-line revoke refuses to guess legacy ownership", free_revoke.returncode != 0 and os.path.exists(credential), True)
+        with open(credential, "w") as handle:
+            handle.write(legacy)
+        AGENTS["agt_local"] = {"uid": "agt_local", "provider": "local"}
+        next(row for row in Stub.lines["data"] if row["uid"] == LOCAL)["agent_uid"] = "agt_local"
+        recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        check("retiring a line preserves a legacy file of unknown ownership", recovered.returncode == 0 and os.path.exists(credential), True)
+        if os.path.exists(credential):
+            os.unlink(credential)
+        created = run("mint", FREE, cwd=work, base=base, token=token)
+        check("create agent for lost-response retry", created.returncode, 0)
+        Stub.delete_status = 404
+        retired = run("revoke", cwd=work, base=base, token=token)
+        check("DELETE 404 still removes the file naming the retired agent", retired.returncode == 0 and not os.path.exists(credential), True)
+        Stub.delete_status = 200
+        if os.path.exists(credential):
+            os.unlink(credential)
+        next(row for row in Stub.lines["data"] if row["uid"] == FREE)["agent_uid"] = None
+        AGENTS.pop("d2e048a4cbefdc491657eaddc9c7657a", None)
+        for bad_base in ('http://container/"', 'http://container/\\', 'http://container/\n'):
+            Stub.requests.clear()
+            refused = run("mint", FREE, "--agent-api-base", bad_base, cwd=work, base=base, token=token)
+            check("invalid container base is refused before mint POST", refused.returncode != 0 and not Stub.requests, True)
+            next(row for row in Stub.lines["data"] if row["uid"] == FREE)["agent_uid"] = None
+            AGENTS.pop("d2e048a4cbefdc491657eaddc9c7657a", None)
+            content = f"PLOW_API_BASE={bad_base}\nPLOW_AGENT_UID=agt_local\nPLOW_AGENT_TOKEN=plow_old_token\n"
+            if "\n" not in bad_base:
+                with open(credential, "w") as handle:
+                    handle.write(content)
+                Stub.requests.clear()
+                refused = run("rotate", cwd=work, base=base, token=token)
+                with open(credential) as handle:
+                    check("invalid saved base is refused before rotation POST", refused.returncode != 0 and not Stub.requests and handle.read() == content, True)
                 os.unlink(credential)
+        Stub.requests.clear()
+        refused = run("mint", FREE, cwd=work, base=base+'"', token=token)
+        check("invalid host API base is refused without requests", refused.returncode != 0 and not Stub.requests, True)
         check("no legacy key or chat routes called", any("api-keys" in req or "relay/agents" in req or "/v1/chats" in req for req in Stub.requests), False)
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
