@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
 
-FREE, CLOUD, LOCAL = "ln_free", "ln_cloud", "ln_local"
+FREE, CLOUD, SELF_HOSTED = "ln_free", "ln_cloud", "ln_self_hosted"
 PHOTO_URL = "https://api.example.com/v1/profile-photos/2b0f9c1e-0000-4000-8000-000000000001"
 
 
@@ -33,11 +33,11 @@ def line(uid: str, name: str) -> dict:
 
 
 LINES = {"data": [dict(line(uid, name), agent_uid=agent_uid) for uid, name, agent_uid in (
-    (FREE, "Free", None), (CLOUD, "Cloud", "agt_cloud"), (LOCAL, "Local", "agt_local"),
+    (FREE, "Free", None), (CLOUD, "Cloud", "agt_cloud"), (SELF_HOSTED, "Self hosted", "agt_self_hosted"),
 )]}
 AGENTS = {
     "agt_cloud": {"uid": "agt_cloud", "provider": "exe:life"},
-    "agt_local": {"uid": "agt_local", "provider": "local"},
+    "agt_self_hosted": {"uid": "agt_self_hosted", "provider": "self_hosted"},
 }
 
 
@@ -242,7 +242,7 @@ def main() -> int:
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
         check("free line is free", rows.get(FREE), "free")
         check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
-        check("local line names its agent", rows.get(LOCAL), "agt_local")
+        check("self_hosted line names its agent", rows.get(SELF_HOSTED), "agt_self_hosted")
 
         credential = os.path.join(work, "plow-credentials")
         os.mkdir(credential)
@@ -254,7 +254,7 @@ def main() -> int:
         check("occupied line renders the API message", occupied.stderr.strip().endswith("answered 409: Rotate its credential or delete it first"), True)
         minted = run("mint", FREE, "--agent-api-base", "http://host.docker.internal:8000", cwd=work, base=base, token=token)
         check("mint succeeds", minted.returncode, 0)
-        check("mint creates a local agent", Stub.minted[-1] if Stub.minted else None, {"name": "plow-agent", "provider": "local", "line_uid": FREE})
+        check("mint creates a self_hosted agent", Stub.minted[-1] if Stub.minted else None, {"name": "plow-agent", "provider": "self_hosted", "line_uid": FREE})
         if not os.path.isfile(credential):
             failures.append("mint did not create credential file")
         else:
@@ -284,8 +284,8 @@ def main() -> int:
             check("rotation keeps mode 600", os.stat(credential).st_mode & 0o777, 0o600)
             cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
             check("line recovery refuses cloud agents", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr, True)
-            recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
-            check("line recovery retires its local agent", recovered.returncode == 0 and "agt_local" in Stub.revoked, True)
+            recovered = run("revoke", SELF_HOSTED, cwd=work, base=base, token=token)
+            check("line recovery retires its self_hosted agent", recovered.returncode == 0 and "agt_self_hosted" in Stub.revoked, True)
             check("line recovery leaves a different credential", os.path.exists(credential), True)
             Stub.delete_status = 500
             failed = run("revoke", cwd=work, base=base, token=token)
@@ -303,9 +303,9 @@ def main() -> int:
         check("free-line revoke refuses to guess legacy ownership", free_revoke.returncode != 0 and os.path.exists(credential), True)
         with open(credential, "w") as handle:
             handle.write(legacy)
-        AGENTS["agt_local"] = {"uid": "agt_local", "provider": "local"}
-        next(row for row in Stub.lines["data"] if row["uid"] == LOCAL)["agent_uid"] = "agt_local"
-        recovered = run("revoke", LOCAL, cwd=work, base=base, token=token)
+        AGENTS["agt_self_hosted"] = {"uid": "agt_self_hosted", "provider": "self_hosted"}
+        next(row for row in Stub.lines["data"] if row["uid"] == SELF_HOSTED)["agent_uid"] = "agt_self_hosted"
+        recovered = run("revoke", SELF_HOSTED, cwd=work, base=base, token=token)
         check("retiring a line preserves a legacy file of unknown ownership", recovered.returncode == 0 and os.path.exists(credential), True)
         if os.path.exists(credential):
             os.unlink(credential)
@@ -325,7 +325,7 @@ def main() -> int:
             check("invalid container base is refused before mint POST", refused.returncode != 0 and not Stub.requests, True)
             next(row for row in Stub.lines["data"] if row["uid"] == FREE)["agent_uid"] = None
             AGENTS.pop("d2e048a4cbefdc491657eaddc9c7657a", None)
-            content = f"PLOW_API_BASE={bad_base}\nPLOW_AGENT_UID=agt_local\nPLOW_AGENT_TOKEN=plow_old_token\n"
+            content = f"PLOW_API_BASE={bad_base}\nPLOW_AGENT_UID=agt_self_hosted\nPLOW_AGENT_TOKEN=plow_old_token\n"
             if "\n" not in bad_base:
                 with open(credential, "w") as handle:
                     handle.write(content)

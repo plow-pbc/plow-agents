@@ -81,7 +81,8 @@ ln_xxx  Ada     +1 555 0100    free
 ```
 
 Status is `free` or the UID of the agent holding the line, read directly from
-`GET /v1/lines`. `mint` refuses a
+`GET /v1/lines`. This display uses the same agent UID for `self_hosted` and
+managed providers; it does not infer a provider from the UID. `mint` refuses a
 line that already has an agent because two agents would answer the same chat.
 
 The first build can take a few minutes. When the log says `plow-init:
@@ -124,7 +125,7 @@ build cache, and chat history remain; the agent credential and local agent state
 do not.
 
 If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
-local agent holding that line. It refuses a cloud agent. It removes the credential file only when `PLOW_AGENT_UID` matches the retired
+self-hosted agent (`provider: "self_hosted"`) holding that line. It refuses a cloud agent. It removes the credential file only when `PLOW_AGENT_UID` matches the retired
 agent. A legacy file without that UID, or one naming another agent, stays in
 place: confirm which agent it belongs to before removing it manually. Revoking
 a free line fails without touching the file.
@@ -138,7 +139,7 @@ The account token stays on the host and lets this CLI list lines, mint, rotate, 
 and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` to that repo's
 `.gitignore`. The file records `PLOW_AGENT_UID` alongside the token so rotation
-and revocation address the agent directly. `mint` creates a local agent through
+and revocation address the agent directly. `mint` creates an agent with `provider: "self_hosted"` through
 `POST /v1/agents` and refuses to overwrite an existing file; use `rotate` to
 replace its credential. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
 shape with placeholder values.

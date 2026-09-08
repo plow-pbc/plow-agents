@@ -7,8 +7,8 @@
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
     plow-agents profile          set or show this account's public profile (--photo takes a file)
-    plow-agents rotate           replace this local agent's credential
-    plow-agents revoke [line]    retire a local agent by file or line
+    plow-agents rotate           replace this self-hosted agent's credential
+    plow-agents revoke [line]    retire a self-hosted agent by file or line
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
 rotate, revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
@@ -124,7 +124,7 @@ def write_private(path: str, body: str) -> str:
 
 
 def read_credential(path: str) -> dict[str, str]:
-    """Read the local agent identity and its container's API address."""
+    """Read the self-hosted agent identity and its container's API address."""
     try:
         with open(path) as handle:
             return dict(line.rstrip("\n").split("=", 1) for line in handle if "=" in line)
@@ -342,10 +342,10 @@ def mint(args: argparse.Namespace) -> None:
         die(f"{destination} already exists -- use `plow-agents rotate`, or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
     account = account_token(args)
     minted = call("POST", args.api_base, "/v1/agents", token=account,
-                  body={"name": "plow-agent", "provider": "local", "line_uid": line_uid})
+                  body={"name": "plow-agent", "provider": "self_hosted", "line_uid": line_uid})
     agent, token = minted["agent"], minted["token"]
     if not token:
-        die("the local agent create returned no token")
+        die("the self-hosted agent create returned no token")
     install_credential(agent["uid"], token, args.agent_api_base)
     log(f"Created agent {agent['uid']} for line:{line_uid}.")
 
@@ -356,13 +356,13 @@ def rotate(args: argparse.Namespace) -> None:
     base = strip_v1(credential.get("PLOW_API_BASE", ""))
     rotated = call("POST", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}/credential", token=account_token(args))
     if not rotated["token"]:
-        die("rotation returned no local token")
+        die("rotation returned no self-hosted token")
     install_credential(uid, rotated["token"], base)
     log(f"Rotated agent {uid}. Recreate its container to load the new credential.")
 
 
 def revoke(args: argparse.Namespace) -> None:
-    """Retire this file's agent, or recover a local agent by line."""
+    """Retire this file's agent, or recover a self-hosted agent by line."""
     path = os.path.abspath(CREDENTIAL_FILE)
     credential = read_credential(path)
     account = account_token(args)
@@ -375,7 +375,7 @@ def revoke(args: argparse.Namespace) -> None:
         if not uid:
             die(f"line:{args.line} has no agent -- left {path} untouched")
         agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
-        if agent["provider"] != "local":
+        if agent["provider"] != "self_hosted":
             die(f"line:{args.line} is held by {uid} -- delete that agent in Plow")
     else:
         uid = credential_agent_uid(credential)
@@ -423,8 +423,8 @@ def main() -> int:
     it = verbs.add_parser("rotate", help="replace this agent's credential in ./plow-credentials")
     it.set_defaults(run=rotate)
 
-    it = verbs.add_parser("revoke", help="retire the local agent in ./plow-credentials, or by line")
-    it.add_argument("line", nargs="?", help="line uid whose local agent should be retired")
+    it = verbs.add_parser("revoke", help="retire the self-hosted agent in ./plow-credentials, or by line")
+    it.add_argument("line", nargs="?", help="line uid whose self-hosted agent should be retired")
     it.set_defaults(run=revoke)
 
     args = parser.parse_args()
