@@ -97,7 +97,7 @@ class Stub(BaseHTTPRequestHandler):
             Stub.minted.append(body)
             selected = next(row for row in Stub.lines["data"] if row["uid"] == body["line_uid"])
             if selected["agent_uid"]:
-                return self._send(409, {"detail": "line already has an agent"})
+                return self._send(409, {"detail": {"code": "AGENT_EXISTS", "agent_uid": selected["agent_uid"], "message": "Rotate its credential or delete it first"}})
             selected["agent_uid"] = "d2e048a4cbefdc491657eaddc9c7657a"
             agent = {"uid": "d2e048a4cbefdc491657eaddc9c7657a", "name": body["name"], "provider": body["provider"],
                      "credential": {"id": 99, "scopes": ["chats:use", "relay:call"]}}
@@ -232,6 +232,7 @@ def main() -> int:
         os.rmdir(credential)
         occupied = run("mint", CLOUD, cwd=work, base=base, token=token)
         check("occupied line is refused without a file", occupied.returncode != 0 and not os.path.exists(credential), True)
+        check("occupied line renders the API message", occupied.stderr.strip().endswith("answered 409: Rotate its credential or delete it first"), True)
         minted = run("mint", FREE, "--agent-api-base", "http://host.docker.internal:8000", cwd=work, base=base, token=token)
         check("mint succeeds", minted.returncode, 0)
         check("mint creates a local agent", Stub.minted[-1] if Stub.minted else None, {"name": "plow-agent", "provider": "local", "line_uid": FREE})
@@ -246,6 +247,7 @@ def main() -> int:
             Stub.requests.clear()
             repeated = run("mint", FREE, cwd=work, base=base, token=token)
             check("re-mint directs to explicit rotation", repeated.returncode != 0 and "rotate" in repeated.stderr, True)
+            check("re-mint names the credential file", credential in repeated.stderr, True)
             check("re-mint makes no requests", Stub.requests, [])
             Stub.rotate_status = 500
             failed = run("rotate", cwd=work, base=base, token=token)
@@ -275,6 +277,24 @@ def main() -> int:
             check("revoke removes credential", os.path.exists(credential), False)
             listed = run("lines", cwd=work, base=base, token=token)
             check("retired line is free", f"{FREE}\tFree\t+1555free\tfree" in listed.stdout, True)
+        for already_retired in (False, True):
+            created = run("mint", FREE, cwd=work, base=base, token=token)
+            check("create agent for legacy-file recovery", created.returncode, 0)
+            if already_retired:
+                retired = run("revoke", cwd=work, base=base, token=token)
+                check("retire agent before recovering stale file", retired.returncode, 0)
+            with open(credential, "w") as handle:
+                handle.write("PLOW_API_BASE=x\nPLOW_AGENT_TOKEN=plow_legacy_token\n")
+            if not already_retired:
+                Stub.delete_status = 500
+                failed = run("revoke", FREE, cwd=work, base=base, token=token)
+                check("failed line revoke preserves legacy file", failed.returncode != 0 and os.path.exists(credential), True)
+                Stub.delete_status = 200
+            recovered = run("revoke", FREE, cwd=work, base=base, token=token)
+            check(f"line revoke removes file naming no agent (already retired={already_retired})",
+                  recovered.returncode == 0 and not os.path.exists(credential), True)
+            if os.path.exists(credential):
+                os.unlink(credential)
         check("no legacy key or chat routes called", any("api-keys" in req or "relay/agents" in req or "/v1/chats" in req for req in Stub.requests), False)
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)

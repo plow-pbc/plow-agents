@@ -124,7 +124,9 @@ build cache, and chat history remain; the agent credential and local agent state
 do not.
 
 If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
-local agent holding that line. It refuses a cloud agent.
+local agent holding that line. It refuses a cloud agent. Once the line has no
+agent, it also removes an old credential file without `PLOW_AGENT_UID`, allowing
+a fresh `mint`. A file naming a different agent stays in place.
 
 Mint before the first `docker compose up`. If Docker was started first, it
 created `./plow-credentials` as an empty directory; recover with: `docker compose down -v && rmdir plow-credentials`. Then mint.
