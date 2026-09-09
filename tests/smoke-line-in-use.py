@@ -281,7 +281,19 @@ def main() -> int:
         else:
             with open(credential) as handle:
                 original = handle.read()
-            check("credential records agent identity", "PLOW_AGENT_UID=d2e048a4cbefdc491657eaddc9c7657a\n" in original, True)
+            check("credential records agent identity", "# plow-agent-uid: d2e048a4cbefdc491657eaddc9c7657a\n" in original, True)
+            check("only image-supported settings are emitted", {line.split("=", 1)[0] for line in original.splitlines() if line and not line.startswith("#")}, {"PLOW_API_BASE", "PLOW_AGENT_TOKEN"})
+            unsupported = os.path.join(work, "unsupported-credential")
+            content = "PLOW_API_BASE=https://api.example.com\nPLOW_AGENT_TOKEN=unused\nPLOW_AGENT_UID=unsupported-agent\n"
+            with open(unsupported, "w") as handle:
+                handle.write(content)
+            Stub.requests.clear()
+            for verb in ("rotate", "revoke"):
+                refused = run(verb, "--credential-file", unsupported, cwd=work, base=base, token=token)
+                with open(unsupported) as handle:
+                    check(f"{verb} requires comment identity before API calls", refused.returncode != 0 and not Stub.requests and handle.read() == content, True)
+            removed = run("fix-credentials", cwd=work, base=base, token=token)
+            check("repair verb is unavailable", removed.returncode == 2 and "invalid choice" in removed.stderr, True)
             check("credential has mode 600", os.stat(credential).st_mode & 0o777, 0o600)
             check("mint never prints token", "plow_minted99_token" in minted.stdout + minted.stderr, False)
             Stub.requests.clear()
@@ -300,7 +312,7 @@ def main() -> int:
                 updated = handle.read()
             check("rotation installs new token", "PLOW_AGENT_TOKEN=plow_rotated100_token\n" in updated, True)
             check("rotation preserves container API base", "PLOW_API_BASE=http://host.docker.internal:8000\n" in updated, True)
-            check("rotation preserves identity", "PLOW_AGENT_UID=d2e048a4cbefdc491657eaddc9c7657a\n" in updated, True)
+            check("rotation preserves identity", "# plow-agent-uid: d2e048a4cbefdc491657eaddc9c7657a\n" in updated, True)
             check("rotation never prints token", "plow_rotated100_token" in rotated.stdout + rotated.stderr, False)
             check("rotation keeps mode 600", os.stat(credential).st_mode & 0o777, 0o600)
             cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
@@ -351,7 +363,7 @@ def main() -> int:
             check("invalid container base is refused before mint POST", refused.returncode != 0 and not Stub.requests, True)
             next(row for row in Stub.lines["data"] if row["uid"] == FREE)["agent_uid"] = None
             AGENTS.pop("d2e048a4cbefdc491657eaddc9c7657a", None)
-            content = f"PLOW_API_BASE={bad_base}\nPLOW_AGENT_UID=agt_self_hosted\nPLOW_AGENT_TOKEN=plow_old_token\n"
+            content = f"PLOW_API_BASE={bad_base}\n# plow-agent-uid: agt_self_hosted\nPLOW_AGENT_TOKEN=plow_old_token\n"
             if "\n" not in bad_base:
                 with open(credential, "w") as handle:
                     handle.write(content)
