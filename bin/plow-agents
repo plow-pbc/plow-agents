@@ -179,6 +179,20 @@ def account_token(args: argparse.Namespace) -> str:
 # --- verbs -----------------------------------------------------------------
 
 
+def account_lines(base: str, token: str) -> list[dict]:
+    """Only lines on which this account owns an active chat can be minted."""
+    chats = call("GET", base, "/v1/chats", token=token)["data"]
+    owned = {
+        participant["line"]["uid"]
+        for chat in chats if chat["status"] == "active"
+        for participant in chat["participants"]
+        if participant["type"] == "agent" and participant["relationship"] == "self"
+    }
+    if not owned:
+        return []
+    return [line for line in call("GET", base, "/v1/lines", token=token)["data"] if line["uid"] in owned]
+
+
 def login(args: argparse.Namespace) -> None:
     # `provision_chat` asks for a line and a chat on it in the same handshake:
     # a real change to the account, and one nothing here can undo. So it is
@@ -209,8 +223,7 @@ def login(args: argparse.Namespace) -> None:
             # Now that a token is in hand, this account can be asked about
             # itself -- and `mint` has nothing to scope a credential to
             # without a line, so say so here rather than two verbs later.
-            status, body = request("GET", args.api_base + "/v1/lines", token=token)
-            if status // 100 == 2 and not body["data"]:
+            if not account_lines(args.api_base, token):
                 log("This account holds no assistant line yet: run `plow-agents login --new-line` to be given one.")
             return
         time.sleep(POLL_S)
@@ -219,7 +232,7 @@ def login(args: argparse.Namespace) -> None:
 
 def lines(args: argparse.Namespace) -> None:
     token = account_token(args)
-    available = call("GET", args.api_base, "/v1/lines", token=token)["data"]
+    available = account_lines(args.api_base, token)
     if not available:
         log("No assistant lines on this account yet.")
         log("Run `plow-agents login --new-line` to be given one.")
@@ -380,11 +393,11 @@ def revoke(args: argparse.Namespace) -> None:
         uid = line["agent_uid"]
         if not uid:
             die(f"line:{args.line} has no agent -- left {path} untouched")
-        agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
-        if agent["provider"] != "self_hosted":
-            die(f"line:{args.line} is held by {uid} -- delete that agent in Plow")
     else:
         uid = credential_agent_uid(credential)
+    agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
+    if agent["provider"] != "self_hosted":
+        die(f"{uid} is not self-hosted -- delete that agent in Plow")
     status, _ = request("DELETE", args.api_base + f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
     if status // 100 != 2 and status != 404:
         die(f"could not retire agent {uid}: HTTP {status}")

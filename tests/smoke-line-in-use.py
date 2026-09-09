@@ -43,6 +43,8 @@ AGENTS = {
 
 class Stub(BaseHTTPRequestHandler):
     lines: dict = LINES
+    agent_get_status = 200
+    chats = {"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": uid}}]} for uid in (FREE, CLOUD, SELF_HOSTED)]}
     rotate_status = 200
     delete_status = 200
     posts: list[str] = []
@@ -63,11 +65,13 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
         Stub.requests.append(f"GET {self.path}")
+        if self.path == "/v1/chats":
+            return self._send(200, Stub.chats)
         if self.path == "/v1/lines":
             return self._send(200, Stub.lines)
         if self.path.startswith("/v1/agents/"):
             agent = AGENTS.get(self.path.rsplit("/", 1)[1])
-            return self._send(200 if agent else 404, agent)
+            return self._send(Stub.agent_get_status if agent else 404, agent)
         if self.path == "/v1/auth/profile":
             return self._send(Stub.profile_get_status, {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
         self._send(404, {"detail": self.path})
@@ -83,6 +87,10 @@ class Stub(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         Stub.requests.append(f"POST {self.path}")
         Stub.posts.append(self.path)
+        if self.path == "/v1/auth/activate":
+            return self._send(200, {"display_code": "test", "activation_secret": "synthetic", "send_to": "+15555555555"})
+        if self.path == "/v1/auth/activate/redeem":
+            return self._send(200, {"status": "verified", "token": "synthetic_account_token"})
         if self.path == "/v1/auth/profile/photo":
             raw = self.rfile.read(int(self.headers["Content-Length"]))
             # The part's own bytes, recovered the way a server does: split on
@@ -238,12 +246,25 @@ def main() -> int:
         Stub.requests.clear()
         listed = run("lines", cwd=work, base=base, token=token)
         check("lines exits 0", listed.returncode, 0)
-        check("lines needs only the lines resource", Stub.requests, ["GET /v1/lines"])
+        check("lines reads owned chats and line occupancy without a key join", Stub.requests, ["GET /v1/chats", "GET /v1/lines"])
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
         check("free line is free", rows.get(FREE), "free")
         check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
         check("self_hosted line names its agent", rows.get(SELF_HOSTED), "agt_self_hosted")
 
+        extra_lines = [dict(line(uid, uid), agent_uid=None) for uid in ("ln_unowned", "ln_peer", "ln_pending")]
+        Stub.lines["data"].extend(extra_lines)
+        Stub.chats["data"][0]["participants"].append({"type": "agent", "relationship": "peer", "line": {"uid": "ln_peer"}})
+        Stub.chats["data"].append({"status": "pending", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": "ln_pending"}}]})
+        listed = run("lines", cwd=work, base=base, token=token)
+        check("unowned, peer and pending lines are not advertised as mintable", listed.returncode == 0 and not any(row["uid"] in listed.stdout for row in extra_lines), True)
+        owned_chats = Stub.chats
+        Stub.chats = {"data": []}
+        empty = run("lines", cwd=work, base=base, token=token)
+        check("no active owned chat gives setup guidance despite service lines", "login --new-line" in empty.stderr and not empty.stdout, True)
+        logged_in = run("login", cwd=work, base=base, token=token)
+        check("login with no owned chat gives setup guidance", logged_in.returncode == 0 and "login --new-line" in logged_in.stderr, True)
+        Stub.chats = owned_chats
         credential = os.path.join(work, "plow-credentials")
         os.mkdir(credential)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
@@ -311,9 +332,14 @@ def main() -> int:
             os.unlink(credential)
         created = run("mint", FREE, cwd=work, base=base, token=token)
         check("create agent for lost-response retry", created.returncode, 0)
+        Stub.agent_get_status = 404
         Stub.delete_status = 404
+        Stub.requests.clear()
+        wrong_account = run("revoke", cwd=work, base=base, token=token)
+        check("account-switch 404 preserves credential and sends no DELETE", wrong_account.returncode != 0 and os.path.exists(credential) and not any(req.startswith("DELETE ") for req in Stub.requests), True)
+        Stub.agent_get_status = 200
         retired = run("revoke", cwd=work, base=base, token=token)
-        check("DELETE 404 still removes the file naming the retired agent", retired.returncode == 0 and not os.path.exists(credential), True)
+        check("DELETE 404 after ownership proof removes the matching credential", retired.returncode == 0 and not os.path.exists(credential), True)
         Stub.delete_status = 200
         if os.path.exists(credential):
             os.unlink(credential)

@@ -83,8 +83,9 @@ LINE    NAME    NUMBER         STATUS
 ln_xxx  Ada     +1 555 0100    free
 ```
 
-Status is `free` or the UID of the agent holding the line, read directly from
-`GET /v1/lines`. This display uses the same agent UID for `self_hosted` and
+Only lines on the account's active chats are shown. Status is `free` or the UID
+of the agent holding the line, read from `GET /v1/lines` after filtering by
+`GET /v1/chats`. This display uses the same agent UID for `self_hosted` and
 managed providers; it does not infer a provider from the UID. `mint` refuses a
 line that already has an agent because two agents would answer the same chat.
 
@@ -131,7 +132,10 @@ If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
 self-hosted agent (`provider: "self_hosted"`) holding that line. It refuses a cloud agent. It removes the credential file only when `PLOW_AGENT_UID` matches the retired
 agent. A legacy file without that UID, or one naming another agent, stays in
 place: confirm which agent it belongs to before removing it manually. Revoking
-a free line fails without touching the file.
+a free line fails without touching the file. Both revoke modes first verify
+that the logged-in account owns the agent. If that lookup returns 404, the
+credential stays in place: it may belong to another account. A DELETE 404
+after successful ownership verification still completes cleanup.
 
 Mint before the first `docker compose up`. If Docker was started first, it
 created `./plow-credentials` as an empty directory; recover with: `docker compose down -v && rmdir plow-credentials`. Then mint.
