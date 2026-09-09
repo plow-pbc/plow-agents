@@ -7,6 +7,7 @@
                                  is already answering on each
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
     plow-agents profile          set or show this account's public profile (--photo takes a file)
+    plow-agents fix-credentials  repair UID metadata without rotating the token
     plow-agents rotate           replace this self-hosted agent's credential
     plow-agents revoke [line]    retire a self-hosted agent by file or line
 
@@ -127,7 +128,19 @@ def read_credential(path: str) -> dict[str, str]:
     """Read the self-hosted agent identity and its container's API address."""
     try:
         with open(path) as handle:
-            return dict(line.rstrip("\n").split("=", 1) for line in handle if "=" in line)
+            credential = {}
+            for line in handle:
+                line = line.strip()
+                if line.startswith("# plow-agent-uid:"):
+                    key, value = "PLOW_AGENT_UID", line.partition(":")[2].strip()
+                elif line.startswith("#") or "=" not in line:
+                    continue
+                else:
+                    key, value = line.split("=", 1)
+                if key == "PLOW_AGENT_UID" and key in credential and credential[key] != value:
+                    die("conflicting agent UIDs in credential -- resolve before continuing")
+                credential[key] = value
+            return credential
     except FileNotFoundError:
         return {}
 
@@ -142,8 +155,22 @@ def credential_agent_uid(credential: dict[str, str]) -> str:
 def install_credential(path: str, uid: str, token: str, base: str) -> None:
     if any(character in token + base + uid for character in "\r\n\"\\"):
         die("the credential carries quote or newline characters")
-    written = write_private(path, f"PLOW_API_BASE={base}\nPLOW_AGENT_TOKEN={token}\nPLOW_AGENT_UID={uid}\n")
+    written = write_private(path, f"PLOW_API_BASE={base}\nPLOW_AGENT_TOKEN={token}\n# plow-agent-uid: {uid}\n")
     log(f"Wrote {written} (mode 600).")
+
+
+def fix_credentials(args: argparse.Namespace) -> None:
+    """Move legacy UID metadata into a comment without changing the token."""
+    credential_agent_uid(read_credential(args.credential_file))
+    with open(args.credential_file) as handle:
+        original = handle.read()
+    repaired = "".join(
+        "# plow-agent-uid: " + line.strip().split("=", 1)[1] + "\n"
+        if line.strip().startswith("PLOW_AGENT_UID=") else line
+        for line in original.splitlines(keepends=True)
+    )
+    written = write_private(args.credential_file, repaired)
+    log(f"Repaired {written} (mode 600). Recreate its container to load the credential.")
 
 
 def strip_v1(base: str) -> str:
@@ -352,7 +379,7 @@ def mint(args: argparse.Namespace) -> None:
             f"rmdir {destination}`, then mint again"
         )
     if os.path.exists(destination):
-        die(f"{destination} already exists -- use `plow-agents rotate`, or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
+        die(f"{destination} already exists -- use `plow-agents fix-credentials` to repair legacy UID metadata, `plow-agents rotate`, or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
     account = account_token(args)
     minted = call("POST", args.api_base, "/v1/agents", token=account,
                   body={"name": "plow-agent", "provider": "self_hosted", "line_uid": line_uid})
@@ -439,6 +466,10 @@ def main() -> int:
     it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"where to write the credential (default ./{CREDENTIAL_FILE})")
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
+
+    it = verbs.add_parser("fix-credentials", help="repair legacy UID metadata without API calls or token rotation")
+    it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"the credential to repair (default ./{CREDENTIAL_FILE})")
+    it.set_defaults(run=fix_credentials)
 
     it = verbs.add_parser("rotate", help="replace this agent's credential in ./plow-credentials")
     it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"the credential to rotate (default ./{CREDENTIAL_FILE})")
