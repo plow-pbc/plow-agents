@@ -60,7 +60,7 @@ python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agen
 
 Uncomment `environment` and `AGENT_ID` in `compose.yml`, set your registered ID, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
-`profile` sets your account name and photo for the leaderboard; the name also appears in chats and invitations. Use a local photo file Plow hosts or a public HTTPS URL, or view the current profile:
+`profile` sets your account's public name and photo. `--photo` takes a local file Plow hosts, or a public HTTPS URL.
 
 ```sh
 plow-agents profile --name "Ada" --photo ./ada.png
