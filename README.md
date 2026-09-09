@@ -58,9 +58,17 @@ set -a; . ./plow-credentials; set +a
 python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agent name>" --blurb "<one line>"
 ```
 
-3. Bake the reporter into your image: copy the example's [agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile).
+3. Bake in the reporter:
 
-Set `AGENT_ID=<your-agent-id>` in your own Compose environment, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
+```dockerfile
+# Dockerfile; the three files below live under image/s6-overlay/:
+COPY image/s6-overlay/ /etc/s6-overlay/
+# s6-rc.d/agent-index/type                  longrun
+# s6-rc.d/agent-index/run                   executable loop: report, sleep 3600
+# s6-rc.d/user/contents.d/agent-index        empty file; enables the service
+```
+
+Use the example's [run script](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/image/s6-overlay/s6-rc.d/agent-index/run), vendor `agent_index_client.py` at `/opt/plow/agent-index-client.py` using its [pinned download and checksum](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile#L77-L88), and set `AGENT_ID=<your-agent-id>` in your Compose environment before rebuilding and starting to report to the [leaderboard](https://aiworthusing.com/agent-index).
 
 `profile` is only for the leaderboard. Set your name and photo (a local file Plow hosts, or a public HTTPS URL), or view them:
 
