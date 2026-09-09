@@ -58,7 +58,7 @@ python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agen
 
 3. Bake the reporter into your image: copy the example's [agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile).
 
-Add `environment: [AGENT_ID=<your-agent-id>]` under your agent service in `compose.yml`, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
+Uncomment `AGENT_ID` in `compose.yml`, set your registered ID, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
 `profile` sets your account name and photo for the leaderboard; the name also appears in chats and invitations. Use a local photo file Plow hosts or a public HTTPS URL, or view the current profile:
 
