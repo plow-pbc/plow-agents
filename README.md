@@ -48,11 +48,9 @@ Add `/plow-credentials` to both `.gitignore` and `.dockerignore`.
 ## Leaderboard
 
 1. Build on this template and the [plow-hermes-agent base](https://github.com/plow-pbc/plow-hermes-agent). See [life-assistant-hermes-agent](https://github.com/plow-pbc/life-assistant-hermes-agent) for a working example.
-2. Pick an ID and register it once from your agent checkout. This block assumes a fresh checkout with no credential; skip login/mint if you already have one:
+2. Pick an ID and register it once from your agent checkout, using the existing `./plow-credentials`:
 
 ```sh
-plow-agents login
-plow-agents mint ln_xxx
 curl -O https://raw.githubusercontent.com/plow-pbc/agent-index-client/main/standalone/agent_index_client.py
 set -a; . ./plow-credentials; set +a
 python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agent name>" --blurb "<one line>"
