@@ -83,7 +83,10 @@ LINE    NAME    NUMBER         STATUS
 ln_xxx  Ada     +1 555 0100    free
 ```
 
-Status is `free`, `cloud <agent uid>`, or `local <key id>`. `mint` refuses a
+Only lines on the account's active chats are shown. Status is `free` or the UID
+of the agent holding the line, read from `GET /v1/lines` after filtering by
+`GET /v1/chats`. This display uses the same agent UID for `self_hosted` and
+managed providers; it does not infer a provider from the UID. `mint` refuses a
 line that already has an agent because two agents would answer the same chat.
 
 The first build can take a few minutes. When the log says `plow-init:
@@ -109,7 +112,11 @@ This keeps `./plow-credentials`, so the rebuilt agent uses the same credential,
 line, and chat without another mint. The build cache also remains, so unchanged
 layers are reused.
 
-When the development session is over, revoke the credential first and let
+To replace this agent's credential, run `plow-agents rotate`, then recreate its
+container so it loads the new file. Rotation preserves the agent, line, settings,
+and container API address, and immediately revokes the old token.
+
+When the development session is over, retire the agent first and let
 Compose remove the container, network, and home volume:
 
 ```sh
@@ -121,20 +128,27 @@ The line is now free for the next `mint`. The account token, local checkout,
 build cache, and chat history remain; the agent credential and local agent state
 do not.
 
-If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` revokes the one
-local credential holding that line. It refuses a cloud agent or an ambiguous
-set of holders.
+If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
+self-hosted agent (`provider: "self_hosted"`) holding that line. It refuses a cloud agent. It removes the credential file only when `PLOW_AGENT_UID` matches the retired
+agent. A legacy file without that UID, or one naming another agent, stays in
+place: confirm which agent it belongs to before removing it manually. Revoking
+a free line fails without touching the file. Both revoke modes first verify
+that the logged-in account owns the agent. If that lookup returns 404, the
+credential stays in place: it may belong to another account. A DELETE 404
+after successful ownership verification still completes cleanup.
 
 Mint before the first `docker compose up`. If Docker was started first, it
 created `./plow-credentials` as an empty directory; recover with: `docker compose down -v && rmdir plow-credentials`. Then mint.
 
 ## Credentials and authority
 
-The account token stays on the host and lets this CLI list lines, mint, revoke,
+The account token stays on the host and lets this CLI list lines, mint, rotate, revoke,
 and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` to that repo's
-`.gitignore`. Re-minting over the file rotates its old key rather than
-leaving a live credential behind. `plow-credentials.example` shows the file's
+`.gitignore`. The file records `PLOW_AGENT_UID` alongside the token so rotation
+and revocation address the agent directly. `mint` creates an agent with `provider: "self_hosted"` through
+`POST /v1/agents` and refuses to overwrite an existing file; use `rotate` to
+replace its credential. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
 shape with placeholder values.
 
 An agent credential is restricted to the chosen line, but it has the same role
@@ -156,6 +170,8 @@ image's docs.
 Most developers do not need the remaining CLI flags:
 
 - `--api-base` changes the API called by the CLI and goes before the verb.
+  It requires HTTPS; HTTP is allowed only for `localhost`, `127.0.0.1`, `::1`,
+  and `*.orb.local` development hosts. These HTTP calls bypass environment proxies.
 - `--token-file` selects a different account-token file.
 - `mint --agent-api-base` writes a different API root for the container. This is
   necessary when a local API is `127.0.0.1` on the host but must be reached as
@@ -168,3 +184,9 @@ API roots omit `/v1`; the CLI and agent append it themselves.
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 The Plow Collective, Inc.
 
 "Plow" and the Plow logo are trademarks of The Plow Collective, Inc. The license grants no trademark rights.
+
+## Verification
+
+Run `just test` for the stdlib-only local HTTP smoke, including mint, line
+ownership, rotation, revocation, and profile commands. The recipe runs
+`python3 tests/smoke-line-in-use.py`, the same command used by CI.
