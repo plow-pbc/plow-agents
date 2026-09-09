@@ -139,10 +139,10 @@ def credential_agent_uid(credential: dict[str, str]) -> str:
     return uid
 
 
-def install_credential(uid: str, token: str, base: str) -> None:
+def install_credential(path: str, uid: str, token: str, base: str) -> None:
     if any(character in token + base + uid for character in "\r\n\"\\"):
         die("the credential carries quote or newline characters")
-    written = write_private(CREDENTIAL_FILE, f"PLOW_API_BASE={base}\nPLOW_AGENT_TOKEN={token}\nPLOW_AGENT_UID={uid}\n")
+    written = write_private(path, f"PLOW_API_BASE={base}\nPLOW_AGENT_TOKEN={token}\nPLOW_AGENT_UID={uid}\n")
     log(f"Wrote {written} (mode 600).")
 
 
@@ -332,11 +332,11 @@ def profile(args: argparse.Namespace) -> None:
 
 def mint(args: argparse.Namespace) -> None:
     line_uid = args.line
-    destination = os.path.abspath(CREDENTIAL_FILE)
+    destination = os.path.abspath(args.credential_file)
     if os.path.isdir(destination):
         die(
             f"{destination} is a directory -- run `docker compose down -v && "
-            "rmdir plow-credentials`, then mint again"
+            f"rmdir {destination}`, then mint again"
         )
     if os.path.exists(destination):
         die(f"{destination} already exists -- use `plow-agents rotate`, or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
@@ -346,24 +346,30 @@ def mint(args: argparse.Namespace) -> None:
     agent, token = minted["agent"], minted["token"]
     if not token:
         die("the self-hosted agent create returned no token")
-    install_credential(agent["uid"], token, args.agent_api_base)
+    try:
+        install_credential(destination, agent["uid"], token, args.agent_api_base)
+    except BaseException:
+        # A one-time token that never reached its file must not leave a live agent.
+        log(f"Install to {destination} failed -- retiring agent {agent['uid']}.")
+        call("DELETE", args.api_base, f"/v1/agents/{urllib.parse.quote(agent['uid'], safe='')}", token=account)
+        raise
     log(f"Created agent {agent['uid']} for line:{line_uid}.")
 
 
 def rotate(args: argparse.Namespace) -> None:
-    credential = read_credential(CREDENTIAL_FILE)
+    credential = read_credential(args.credential_file)
     uid = credential_agent_uid(credential)
     base = strip_v1(credential.get("PLOW_API_BASE", ""))
     rotated = call("POST", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}/credential", token=account_token(args))
     if not rotated["token"]:
         die("rotation returned no self-hosted token")
-    install_credential(uid, rotated["token"], base)
+    install_credential(args.credential_file, uid, rotated["token"], base)
     log(f"Rotated agent {uid}. Recreate its container to load the new credential.")
 
 
 def revoke(args: argparse.Namespace) -> None:
     """Retire this file's agent, or recover a self-hosted agent by line."""
-    path = os.path.abspath(CREDENTIAL_FILE)
+    path = os.path.abspath(args.credential_file)
     credential = read_credential(path)
     account = account_token(args)
     if args.line:
@@ -417,14 +423,17 @@ def main() -> int:
 
     it = verbs.add_parser("mint", help="a credential for one line, written to ./plow-credentials")
     it.add_argument("line", help="line uid, as printed by `lines`")
+    it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"where to write the credential (default ./{CREDENTIAL_FILE})")
     it.add_argument("--agent-api-base", default=None, help="the API root written into the credential, if the container reaches Plow at a different address than this machine does (default: --api-base)")
     it.set_defaults(run=mint)
 
     it = verbs.add_parser("rotate", help="replace this agent's credential in ./plow-credentials")
+    it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"the credential to rotate (default ./{CREDENTIAL_FILE})")
     it.set_defaults(run=rotate)
 
     it = verbs.add_parser("revoke", help="retire the self-hosted agent in ./plow-credentials, or by line")
     it.add_argument("line", nargs="?", help="line uid whose self-hosted agent should be retired")
+    it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"the credential to revoke (default ./{CREDENTIAL_FILE})")
     it.set_defaults(run=revoke)
 
     args = parser.parse_args()

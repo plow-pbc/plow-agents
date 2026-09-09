@@ -68,6 +68,9 @@ docker compose up --build -d
 docker compose logs -f agent
 ```
 
+`mint --credential-file <path>` writes somewhere other than `./plow-credentials`
+— how a fleet runner gives each agent its own credential file.
+
 `login` prints `Text  Plow Activate: <code>  to  <number>`. Text that phrase
 from the phone that owns the account; the command takes no phone number. It
 stores the account token at `~/.config/plow/token`, so later development cycles

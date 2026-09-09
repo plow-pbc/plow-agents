@@ -247,7 +247,7 @@ def main() -> int:
         credential = os.path.join(work, "plow-credentials")
         os.mkdir(credential)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
-        check("credential directory has recovery instructions", directory.returncode != 0 and "rmdir plow-credentials" in directory.stderr, True)
+        check("credential directory has recovery instructions", directory.returncode != 0 and f"rmdir {os.path.realpath(credential)}" in directory.stderr, True)
         os.rmdir(credential)
         occupied = run("mint", CLOUD, cwd=work, base=base, token=token)
         check("occupied line is refused without a file", occupied.returncode != 0 and not os.path.exists(credential), True)
@@ -378,6 +378,28 @@ def main() -> int:
         finally:
             proxy.shutdown()
             proxy.server_close()
+        custom = os.path.join(work, "nested", "agent-credential")
+        named = run("mint", FREE, "--credential-file", custom, cwd=work, base=base, token=token)
+        check("mint supports a named credential file", named.returncode == 0 and os.path.isfile(custom), True)
+        if os.path.isfile(custom):
+            check("named credential has mode 600", os.stat(custom).st_mode & 0o777, 0o600)
+            check("named mint does not create default file", os.path.exists(credential), False)
+            rotated = run("rotate", "--credential-file", custom, cwd=work, base=base, token=token)
+            with open(custom) as handle:
+                check("rotate updates the named credential", rotated.returncode == 0 and "plow_rotated100_token" in handle.read(), True)
+            retired = run("revoke", "--credential-file", custom, cwd=work, base=base, token=token)
+            check("revoke removes the named credential", retired.returncode == 0 and not os.path.exists(custom), True)
+        blocker = os.path.join(work, "not-a-directory")
+        with open(blocker, "w") as handle:
+            handle.write("parent is a file")
+        impossible = os.path.join(blocker, "credential")
+        seen = len(Stub.revoked)
+        failed = run("mint", FREE, "--credential-file", impossible, cwd=work, base=base, token=token)
+        check("failed credential installation retires the new agent", failed.returncode != 0 and len(Stub.revoked) == seen + 1, True)
+        Stub.delete_status = 500
+        failed = run("mint", FREE, "--credential-file", impossible, cwd=work, base=base, token=token)
+        check("failed installation and retirement identify the destination", impossible in failed.stderr, True)
+        Stub.delete_status = 200
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("empty lines explain activation", "login --new-line" in empty.stderr, True)
