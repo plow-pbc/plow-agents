@@ -2,8 +2,6 @@
 services:
   agent:
     build: .
-    # environment:
-      # AGENT_ID: your-agent-id # leaderboard only, see README
     volumes:
       # `.host`: the image copies it into place as root, so the file's host ownership does not matter.
       - ./plow-credentials:/var/lib/plow/credentials.host:ro

@@ -41,8 +41,9 @@ docker compose down -v
 
 Your repository owns `compose.yml`; copy [compose.example.yml](compose.example.yml) beside your Dockerfile.
 Start your Dockerfile with `FROM` the [plow-hermes-agent base image](https://github.com/plow-pbc/plow-hermes-agent).
+Pulling the published base from public.ecr.aws can 403 on stale credentials: `docker logout public.ecr.aws`, then rebuild.
 Add `/plow-credentials` to both `.gitignore` and `.dockerignore`.
-`docker compose down` keeps memory; `docker compose down -v` starts fresh and picks up image changes to `SOUL.md`. Skills on the Hermes base do not require deleting the volume.
+`docker compose down` keeps memory; `docker compose down -v` starts fresh and picks up image changes to `SOUL.md`. Skill updates reach the agent on rebuild alone; a skill the agent has changed, and google-workspace, need `down -v`.
 
 ## Leaderboard
 
@@ -57,7 +58,7 @@ python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agen
 
 3. The reporter runs as an s6 longrun in your image; see [Building a variant image](https://github.com/plow-pbc/plow-hermes-agent/blob/main/README.md#building-a-variant-image) for how to add one. Copy the [life-assistant agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and its [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile).
 
-Add `AGENT_ID` under `environment` for your agent service in `compose.yml`, set your registered ID, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
+Add `AGENT_ID` under `environment` in your agent service in `compose.yml`, set your registered ID, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
 `profile` sets your account's public name and photo. `--photo` takes a local file Plow hosts, or a public HTTPS URL.
 
