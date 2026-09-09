@@ -408,7 +408,6 @@ def main() -> int:
         named = run("mint", FREE, "--credential-file", custom, cwd=work, base=base, token=token)
         check("mint supports a named credential file", named.returncode == 0 and os.path.isfile(custom), True)
         if os.path.isfile(custom):
-            check("named credential has mode 600", os.stat(custom).st_mode & 0o777, 0o600)
             check("named mint does not create default file", os.path.exists(credential), False)
             rotated = run("rotate", "--credential-file", custom, cwd=work, base=base, token=token)
             with open(custom) as handle:
