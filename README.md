@@ -1,205 +1,100 @@
 # plow-agents
 
-Build a Plow agent from a local checkout, run it in Docker, and give it a real
-Plow line. The agent opens an outbound connection to Plow; Compose publishes no
-ports. This repository is one stdlib-only Python CLI plus a minimal
-`compose.example.yml` for new agents.
+Run a Plow agent in Docker and give it a real Plow line.
 
-The images this runs start from
-[`plow-pbc/plow-hermes-agent`](https://github.com/plow-pbc/plow-hermes-agent);
-[`plow-pbc/life-assistant-hermes-agent`](https://github.com/plow-pbc/life-assistant-hermes-agent)
-is the worked variant, and what Plow itself asks of an image is
-`api/cloud-agents/README.md` in `plow-pbc/plow`.
-
-## Where changes go
-
-This repo is one of several that assemble a Plow agent. The map of which repo
-owns what is in
-[`plow-hermes-agent` README § The repos](https://github.com/plow-pbc/plow-hermes-agent#the-repos);
-read it before a change that touches a neighbour. The test is **who else would
-have to change if this fact changed** — if the answer is a sibling, the change
-belongs there; this repo only follows, by bumping its pin if it holds one.
-
-Not here:
-
-- A second copy of a plow CLI command — `plow-pbc/plow` owns `cli/plow` and the
-  routes behind it.
-- Container lifecycle and the fleet's runtime Compose surface — `plow-pbc/agent-mgr`
-  still owns those until `agent-mgr#130` moves them. The minimal starter
-  `compose.example.yml` a new agent repo copies is this repo's.
-- An agent's persona, skills, or model default — the variant repo, or
-  `plow-pbc/plow-hermes-agent` for the base default.
-- The image's boot contract, mount paths, and config seed —
-  `plow-pbc/plow-hermes-agent`.
-
-Examples:
-
-- Adheres: #6 deleted the Docker and Compose surface #2 had grown here (−614
-  lines), handing container control back to the runner that owns it —
-  https://github.com/plow-pbc/plow-agents/pull/6
-- Violates: #9 added `plow-agents profile` against
-  `GET`/`PATCH /v1/auth/profile`, a second CLI for a route `plow`'s own
-  `cli/plow/commands/profile.py` already wraps —
-  https://github.com/plow-pbc/plow-agents/pull/9
-
-## Develop an agent locally
-
-Each agent repository owns its `compose.yml`. Put `plow-agents/bin` on `PATH`,
-then run the whole loop from the agent checkout so the credential and Compose
-project stay together.
+Requires Python 3 (standard library only), Git, and Docker Compose. Install the CLI:
 
 ```sh
-export PATH="/path/to/plow-agents/bin:$PATH"
-cd /path/to/your-agent
+git clone https://github.com/plow-pbc/plow-agents.git
+export PATH="$PWD/plow-agents/bin:$PATH"
+```
 
-# For a new agent repository that does not have one yet:
-cp /path/to/plow-agents/compose.example.yml compose.yml
+## Quickstart
 
-# Once on this machine. Add --new-line if this account needs an assistant line.
+The sample base has no Compose file; copy this repo's starter into its checkout:
+
+```sh
+git clone https://github.com/plow-pbc/plow-hermes-agent.git
+cp plow-agents/compose.example.yml plow-hermes-agent/compose.yml
+cd plow-hermes-agent
+```
+
+Log in, then text the printed activation phrase from the phone that owns your account. No phone argument is needed.
+Use `login --new-line` if you need an assistant line. Replace `ln_xxx` with a free line ID.
+
+```sh
 plow-agents login
-
 plow-agents lines
-plow-agents profile --name "Ada" --photo ./ada.png            # a file here; Plow hosts it
-plow-agents profile --name "Ada" --photo https://example.com/ada.jpg   # or one already public
-plow-agents profile --show
-plow-agents mint ln_xxx           # before the first `up`
-export AGENT_ID=life              # the registered Agent Index id
+plow-agents mint ln_xxx
 docker compose up --build -d
-docker compose logs -f agent
 ```
 
-`mint --credential-file <path>` writes somewhere other than `./plow-credentials`
-— how a fleet runner gives each agent its own credential file.
-
-`login` prints `Text  Plow Activate: <code>  to  <number>`. Text that phrase
-from the phone that owns the account; the command takes no phone number. It
-stores the account token at `~/.config/plow/token`, so later development cycles
-skip login.
-
-`lines` labels the line id, name, number, and status:
-
-```text
-LINE    NAME    NUMBER         STATUS
-ln_xxx  Ada     +1 555 0100    free
-```
-
-Only lines on the account's active chats are shown. Status is `free` or the UID
-of the agent holding the line, read from `GET /v1/lines` after filtering by
-`GET /v1/chats`. This display uses the same agent UID for `self_hosted` and
-managed providers; it does not infer a provider from the UID. `mint` refuses a
-line that already has an agent because two agents would answer the same chat.
-
-The first build can take a few minutes. When the log says `plow-init:
-configured ... as cht_...`, text the selected line from your phone and the
-agent will answer there.
-
-`AGENT_ID` says which registered Agent Index page receives this image's usage;
-the Life Assistant uses `life`.
-
-### Edit, rebuild, talk, repeat
-
-The agent's files under `/var/lib/hermes` are copied into its home volume. A
-plain rebuild does not replace files already in that volume, so remove the
-volume on every source iteration:
-
-```sh
-# Edit the local agent checkout, then:
-docker compose down -v && docker compose up --build -d
-docker compose logs -f agent
-```
-
-This keeps `./plow-credentials`, so the rebuilt agent uses the same credential,
-line, and chat without another mint. The build cache also remains, so unchanged
-layers are reused.
-
-To replace this agent's credential, run `plow-agents rotate`, then recreate its
-container so it loads the new file. Rotation preserves the agent, line, settings,
-and container API address, and immediately revokes the old token.
-
-When the development session is over, retire the agent first and let
-Compose remove the container, network, and home volume:
+`mint` writes `./plow-credentials`; run it before `up`. The first build takes a few minutes.
+Watch `docker compose logs -f agent` until `plow-init: configured ... as cht_` appears, then text the selected line to talk to it.
+When finished, retire the agent and remove its local memory:
 
 ```sh
 plow-agents revoke
 docker compose down -v
 ```
 
-The line is now free for the next `mint`. The account token, local checkout,
-build cache, and chat history remain; the agent credential and local agent state
-do not.
+## Build your own agent
 
-If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
-self-hosted agent (`provider: "self_hosted"`) holding that line. It refuses a cloud agent. It removes the credential file only when the recorded agent UID matches the retired
-agent. A file without that UID, or one naming another agent, stays in
-place: confirm which agent it belongs to before removing it manually. Revoking
-a free line fails without touching the file. Both revoke modes first verify
-that the logged-in account owns the agent. If that lookup returns 404, the
-credential stays in place: it may belong to another account. A DELETE 404
-after successful ownership verification still completes cleanup.
+Your repository owns `compose.yml`; copy [compose.example.yml](compose.example.yml) beside your Dockerfile.
+Start your Dockerfile with `FROM` the [plow-hermes-agent base image](https://github.com/plow-pbc/plow-hermes-agent).
+Add `/plow-credentials` to both `.gitignore` and `.dockerignore`.
+`docker compose down` keeps memory; `docker compose down -v` starts fresh, including after edits to baked-in agent files.
 
-Mint before the first `docker compose up`. If Docker was started first, it
-created `./plow-credentials` as an empty directory; recover with: `docker compose down -v && rmdir plow-credentials`. Then mint.
+## Leaderboard
 
-## Credentials and authority
+1. Build on this template and the [plow-hermes-agent base](https://github.com/plow-pbc/plow-hermes-agent). See [life-assistant-hermes-agent](https://github.com/plow-pbc/life-assistant-hermes-agent) for a working example.
+2. Pick an ID and register it once from your agent checkout. This block assumes a fresh checkout with no credential; skip login/mint if you already have one:
 
-The account token stays on the host and lets this CLI list lines, mint, rotate, revoke,
-and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
-Compose file to mount read-only. Add `/plow-credentials` to that repo's
-`.gitignore`. The file carries exactly the two names the image reads,
-`PLOW_API_BASE` and `PLOW_AGENT_TOKEN`; a third `NAME=value` line is a refused
-boot. So the agent uid, which only this tool needs, rides in a
-`# plow-agent-uid: <uid>` comment that the image's parser skips, and `rotate`
-and `revoke` read it from there to address the agent directly. A file written
-with a `PLOW_AGENT_UID=<uid>` line instead cannot boot -- so delete it and mint
-again, or replace that line with `# plow-agent-uid: <uid>` to keep the agent it
-names. `mint` creates an agent with `provider: "self_hosted"` through
-`POST /v1/agents` and refuses to overwrite an existing file; use `rotate` to
-replace its credential. It also refuses a line that already answers, naming the
-agent holding it, and says what can be done about that one: a self-hosted agent
-is retired with `revoke <line>`, a cloud agent is deleted in Plow. Two agents on
-one line both reply to the same chat and the owner cannot tell which, so there
-is no flag to skip this. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
-shape with placeholder values.
+```sh
+plow-agents login
+plow-agents mint ln_xxx
+curl -O https://raw.githubusercontent.com/plow-pbc/agent-index-client/main/standalone/agent_index_client.py
+set -a; . ./plow-credentials; set +a
+python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agent name>" --blurb "<one line>"
+```
 
-UID metadata must stay in a comment because existing agent images reject unknown
-credential settings.
+3. Bake the reporter into your image: copy the example's [agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile).
 
-An agent credential is restricted to the chosen line, but it has the same role
-as a hosted Plow agent: that line's chats, Plow inference, `relay:call`, and
-`payments:request` with a $200/day cap. Relay calls can reach the owner's
-machine through Latch, and payment requests can reach the owner's card. Run
-only code you trust with both.
+Set `AGENT_ID=<your-agent-id>` in your own Compose environment, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
-## Configuration escape hatches
+`profile` is only for the leaderboard. Set your name and photo (a local file Plow hosts, or a public HTTPS URL), or view them:
 
-The included `compose.example.yml` is a minimal `build: .` example, not the
-runtime configuration for this repository or every agent. Copy it when starting
-an agent repository; that repository then owns its build, environment, mounts,
-and project name.
+```sh
+plow-agents profile --name "Ada" --photo ./ada.png
+plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
+plow-agents profile --show
+```
 
-Inference defaults to Plow; other providers are configured per the agent
-image's docs.
+## Reference
 
-Most developers do not need the remaining CLI flags:
+| Command | Purpose |
+| --- | --- |
+| `login [--new-line]` | Text a code to log in; optionally create an assistant line. |
+| `lines` | List line IDs, names, numbers, and status; choose a `free` line. |
+| `profile [--name NAME] [--photo PHOTO] [--show]` | Set or show your leaderboard profile. |
+| `mint <line>` | Write a credential for a free line to `./plow-credentials`. |
+| `rotate` | Replace the credential; recreate the container to load it. |
+| `revoke [line]` | Retire the agent in the credential file, or the self-hosted agent on a line. |
 
-- `--api-base` changes the API called by the CLI and goes before the verb.
-  It requires HTTPS; HTTP is allowed only for `localhost`, `127.0.0.1`, `::1`,
-  and `*.orb.local` development hosts. These HTTP calls bypass environment proxies.
-- `--token-file` selects a different account-token file.
-- `mint --agent-api-base` writes a different API root for the container. This is
-  necessary when a local API is `127.0.0.1` on the host but must be reached as
-  `host.docker.internal` from Docker.
+Prefix commands with `plow-agents`; each accepts `--help`. `mint`, `rotate`, and `revoke` accept `--credential-file <path>`.
+The credential file contains `PLOW_API_BASE`, `PLOW_AGENT_TOKEN`, and a `# plow-agent-uid: <uid>` comment. See [the example](plow-credentials.example).
 
-API roots omit `/v1`; the CLI and agent append it themselves.
+## Troubleshooting
+
+A base-image 403 may be stale ECR credentials: try `docker logout public.ecr.aws`, then rebuild.
+If `up` ran before `mint`, Docker created a credential directory. Run `docker compose down -v && rmdir plow-credentials`, then mint a line.
+
+## Where changes go
+
+This repo owns the credential CLI and starter Compose file.
+For sibling responsibilities, see [plow-hermes-agent's repo map](https://github.com/plow-pbc/plow-hermes-agent#the-repos).
 
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 The Plow Collective, Inc.
-
 "Plow" and the Plow logo are trademarks of The Plow Collective, Inc. The license grants no trademark rights.
-
-## Verification
-
-Run `just test` for the stdlib-only local HTTP smoke, including mint, line
-ownership, rotation, revocation, and profile commands. The recipe runs
-`python3 tests/smoke-line-in-use.py`, the same command used by CI.

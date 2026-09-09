@@ -3,7 +3,8 @@ services:
   agent:
     build: .
     environment:
-      AGENT_ID: ${AGENT_ID:?set the Agent Index id this container reports as}
+      # Agent Index id this container reports as; empty means it does not report.
+      AGENT_ID: ${AGENT_ID:-}
     volumes:
       # `.host`: the image copies it into place as root, so the file's host ownership does not matter.
       - ./plow-credentials:/var/lib/plow/credentials.host:ro
