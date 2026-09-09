@@ -368,11 +368,34 @@ def mint(args: argparse.Namespace) -> None:
     if os.path.exists(destination):
         die(f"{destination} already exists -- use `plow-agents rotate` or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
     account = account_token(args)
+    # Two agents on one line both answer the same chat and the owner cannot
+    # tell which replied, so the line is checked here, before anything is
+    # created. There is no flag to proceed anyway: retire the agent that holds
+    # it first, which is a decision rather than a keystroke.
+    line = next((row for row in call("GET", args.api_base, "/v1/lines", token=account)["data"] if row["uid"] == line_uid), None)
+    if line is None:
+        die(f"unknown line:{line_uid}")
+    if line["agent_uid"]:
+        # Which agent decides what the person can do about it: `revoke` retires
+        # a self-hosted one and refuses every other kind, so pointing a cloud
+        # agent's owner at it would only cost them a second refusal. The lines
+        # endpoint publishes no provider, so ask -- on this path only, where a
+        # request is already being spent to say no.
+        status, holder = request("GET", args.api_base + f"/v1/agents/{urllib.parse.quote(line['agent_uid'], safe='')}", token=account)
+        provider = holder.get("provider") if status // 100 == 2 and isinstance(holder, dict) else None
+        remedy = (
+            f"retire it with `plow-agents revoke {line_uid}`" if provider == "self_hosted"
+            else "delete it in Plow (it is a cloud agent)" if provider
+            else "retire that agent before minting here"
+        )
+        die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- {remedy}")
     minted = call("POST", args.api_base, "/v1/agents", token=account,
                   body={"name": "plow-agent", "provider": "self_hosted", "line_uid": line_uid})
     agent, token = minted["agent"], minted["token"]
     if not token:
         die("the self-hosted agent create returned no token")
+    if not agent["uid"]:
+        die("the self-hosted agent create returned no agent uid")
     try:
         install_credential(destination, agent["uid"], token, args.agent_api_base)
     except BaseException:
@@ -384,13 +407,14 @@ def mint(args: argparse.Namespace) -> None:
 
 
 def rotate(args: argparse.Namespace) -> None:
-    credential = read_credential(args.credential_file)
+    path = os.path.abspath(args.credential_file)
+    credential = read_credential(path)
     uid = credential_agent_uid(credential)
     base = strip_v1(credential.get("PLOW_API_BASE", ""))
     rotated = call("POST", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}/credential", token=account_token(args))
     if not rotated["token"]:
         die("rotation returned no self-hosted token")
-    install_credential(args.credential_file, uid, rotated["token"], base)
+    install_credential(path, uid, rotated["token"], base)
     log(f"Rotated agent {uid}. Recreate its container to load the new credential.")
 
 

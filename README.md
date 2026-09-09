@@ -145,10 +145,20 @@ created `./plow-credentials` as an empty directory; recover with: `docker compos
 The account token stays on the host and lets this CLI list lines, mint, rotate, revoke,
 and read or set the public profile. `mint` writes a mode-600 `./plow-credentials` for the agent repo's
 Compose file to mount read-only. Add `/plow-credentials` to that repo's
-`.gitignore`. The file records `# plow-agent-uid: <uid>` as a comment alongside the token so rotation
-and revocation address the agent directly. `mint` creates an agent with `provider: "self_hosted"` through
+`.gitignore`. The file carries exactly the two names the image reads,
+`PLOW_API_BASE` and `PLOW_AGENT_TOKEN`; a third `NAME=value` line is a refused
+boot. So the agent uid, which only this tool needs, rides in a
+`# plow-agent-uid: <uid>` comment that the image's parser skips, and `rotate`
+and `revoke` read it from there to address the agent directly. A file written
+with a `PLOW_AGENT_UID=<uid>` line instead cannot boot -- so delete it and mint
+again, or replace that line with `# plow-agent-uid: <uid>` to keep the agent it
+names. `mint` creates an agent with `provider: "self_hosted"` through
 `POST /v1/agents` and refuses to overwrite an existing file; use `rotate` to
-replace its credential. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
+replace its credential. It also refuses a line that already answers, naming the
+agent holding it, and says what can be done about that one: a self-hosted agent
+is retired with `revoke <line>`, a cloud agent is deleted in Plow. Two agents on
+one line both reply to the same chat and the owner cannot tell which, so there
+is no flag to skip this. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
 shape with placeholder values.
 
 UID metadata must stay in a comment because existing agent images reject unknown
