@@ -368,11 +368,22 @@ def mint(args: argparse.Namespace) -> None:
     if os.path.exists(destination):
         die(f"{destination} already exists -- use `plow-agents rotate` or `plow-agents revoke <line>` to retire the agent; remove this file manually if its ownership cannot be verified")
     account = account_token(args)
+    # Two agents on one line both answer the same chat and the owner cannot
+    # tell which replied, so the line is checked here, before anything is
+    # created. There is no flag to proceed anyway: retire the agent that holds
+    # it first, which is a decision rather than a keystroke.
+    line = next((row for row in call("GET", args.api_base, "/v1/lines", token=account)["data"] if row["uid"] == line_uid), None)
+    if line is None:
+        die(f"unknown line:{line_uid}")
+    if line["agent_uid"]:
+        die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- retire it with `plow-agents revoke {line_uid}` first")
     minted = call("POST", args.api_base, "/v1/agents", token=account,
                   body={"name": "plow-agent", "provider": "self_hosted", "line_uid": line_uid})
     agent, token = minted["agent"], minted["token"]
     if not token:
         die("the self-hosted agent create returned no token")
+    if not agent["uid"]:
+        die("the self-hosted agent create returned no agent uid")
     try:
         install_credential(destination, agent["uid"], token, args.agent_api_base)
     except BaseException:
@@ -384,13 +395,14 @@ def mint(args: argparse.Namespace) -> None:
 
 
 def rotate(args: argparse.Namespace) -> None:
-    credential = read_credential(args.credential_file)
+    path = os.path.abspath(args.credential_file)
+    credential = read_credential(path)
     uid = credential_agent_uid(credential)
     base = strip_v1(credential.get("PLOW_API_BASE", ""))
     rotated = call("POST", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}/credential", token=account_token(args))
     if not rotated["token"]:
         die("rotation returned no self-hosted token")
-    install_credential(args.credential_file, uid, rotated["token"], base)
+    install_credential(path, uid, rotated["token"], base)
     log(f"Rotated agent {uid}. Recreate its container to load the new credential.")
 
 
