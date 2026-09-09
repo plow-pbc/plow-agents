@@ -187,5 +187,6 @@ Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 The P
 
 ## Verification
 
-Run `python3 tests/smoke-line-in-use.py` for the stdlib-only local HTTP smoke,
-including mint, line ownership, rotation, revocation, and profile commands.
+Run `just test` for the stdlib-only local HTTP smoke, including mint, line
+ownership, rotation, revocation, and profile commands. The recipe runs
+`python3 tests/smoke-line-in-use.py`, the same command used by CI.
