@@ -51,16 +51,16 @@ Add `/plow-credentials` to both `.gitignore` and `.dockerignore`.
 2. Pick an ID and register it once from your agent checkout, using the existing `./plow-credentials`:
 
 ```sh
-curl -O https://raw.githubusercontent.com/plow-pbc/agent-index-client/main/standalone/agent_index_client.py
+curl -O https://raw.githubusercontent.com/plow-pbc/agent-index-client/f900ff144076f0a766584b6ec4d0993600779b16/standalone/agent_index_client.py
 set -a; . ./plow-credentials; set +a
 python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agent name>" --blurb "<one line>"
 ```
 
 3. Bake the reporter into your image: copy the example's [agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile).
 
-Set `AGENT_ID=<your-agent-id>` in your own Compose environment, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
+Add `environment: [AGENT_ID=<your-agent-id>]` under your agent service in `compose.yml`, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
-`profile` is only for the leaderboard. Set your name and photo (a local file Plow hosts, or a public HTTPS URL), or view them:
+`profile` sets your account name and photo for the leaderboard; the name also appears in chats and invitations. Use a local photo file Plow hosts or a public HTTPS URL, or view the current profile:
 
 ```sh
 plow-agents profile --name "Ada" --photo ./ada.png
@@ -74,7 +74,7 @@ plow-agents profile --show
 | --- | --- |
 | `login [--new-line]` | Text a code to log in; optionally create an assistant line. |
 | `lines` | List line IDs, names, numbers, and status; choose a `free` line. |
-| `profile [--name NAME] [--photo PHOTO] [--show]` | Set or show your leaderboard profile. |
+| `profile [--name NAME] [--photo PHOTO] [--show]` | Set or show your account profile. |
 | `mint <line>` | Write a credential for a free line to `./plow-credentials`. |
 | `rotate` | Replace the credential; recreate the container to load it. |
 | `revoke [line]` | Retire the agent in the credential file, or the self-hosted agent on a line. |
