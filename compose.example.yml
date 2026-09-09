@@ -2,7 +2,7 @@
 services:
   agent:
     build: .
-    environment:
+    # environment:
       # AGENT_ID: your-agent-id # leaderboard only, see README
     volumes:
       # `.host`: the image copies it into place as root, so the file's host ownership does not matter.
