@@ -273,7 +273,10 @@ def main() -> int:
         Stub.requests.clear()
         occupied = run("mint", CLOUD, cwd=work, base=base, token=token)
         check("occupied line is refused without a file", occupied.returncode != 0 and not os.path.exists(credential), True)
-        check("occupied line names the agent holding it", "agt_cloud" in occupied.stderr and f"revoke {CLOUD}" in occupied.stderr, True)
+        check("cloud-held line names its agent and sends them to Plow", "agt_cloud" in occupied.stderr and "delete it in Plow" in occupied.stderr, True)
+        check("cloud-held line does not suggest revoke, which refuses it", "revoke" in occupied.stderr, False)
+        held = run("mint", SELF_HOSTED, cwd=work, base=base, token=token)
+        check("self-hosted holder is pointed at revoke", held.returncode != 0 and "agt_self_hosted" in held.stderr and f"revoke {SELF_HOSTED}" in held.stderr, True)
         # The refusal is this tool's, not the server's: nothing is created and
         # the create endpoint is never reached.
         check("occupied line is refused before any create", [r for r in Stub.requests if r.startswith("POST")], [])

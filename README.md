@@ -155,8 +155,10 @@ again, or replace that line with `# plow-agent-uid: <uid>` to keep the agent it
 names. `mint` creates an agent with `provider: "self_hosted"` through
 `POST /v1/agents` and refuses to overwrite an existing file; use `rotate` to
 replace its credential. It also refuses a line that already answers, naming the
-agent holding it: two agents on one line both reply to the same chat and the
-owner cannot tell which. Retire that one first -- there is no flag to skip it. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
+agent holding it, and says what can be done about that one: a self-hosted agent
+is retired with `revoke <line>`, a cloud agent is deleted in Plow. Two agents on
+one line both reply to the same chat and the owner cannot tell which, so there
+is no flag to skip this. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
 shape with placeholder values.
 
 UID metadata must stay in a comment because existing agent images reject unknown

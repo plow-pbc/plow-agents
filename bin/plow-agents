@@ -376,7 +376,19 @@ def mint(args: argparse.Namespace) -> None:
     if line is None:
         die(f"unknown line:{line_uid}")
     if line["agent_uid"]:
-        die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- retire it with `plow-agents revoke {line_uid}` first")
+        # Which agent decides what the person can do about it: `revoke` retires
+        # a self-hosted one and refuses every other kind, so pointing a cloud
+        # agent's owner at it would only cost them a second refusal. The lines
+        # endpoint publishes no provider, so ask -- on this path only, where a
+        # request is already being spent to say no.
+        status, holder = request("GET", args.api_base + f"/v1/agents/{urllib.parse.quote(line['agent_uid'], safe='')}", token=account)
+        provider = holder.get("provider") if status // 100 == 2 and isinstance(holder, dict) else None
+        remedy = (
+            f"retire it with `plow-agents revoke {line_uid}`" if provider == "self_hosted"
+            else "delete it in Plow (it is a cloud agent)" if provider
+            else "retire that agent before minting here"
+        )
+        die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- {remedy}")
     minted = call("POST", args.api_base, "/v1/agents", token=account,
                   body={"name": "plow-agent", "provider": "self_hosted", "line_uid": line_uid})
     agent, token = minted["agent"], minted["token"]
