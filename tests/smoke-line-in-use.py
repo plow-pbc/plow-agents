@@ -283,35 +283,17 @@ def main() -> int:
                 original = handle.read()
             check("credential records agent identity", "# plow-agent-uid: d2e048a4cbefdc491657eaddc9c7657a\n" in original, True)
             check("only image-supported settings are emitted", {line.split("=", 1)[0] for line in original.splitlines() if line and not line.startswith("#")}, {"PLOW_API_BASE", "PLOW_AGENT_TOKEN"})
-            legacy_uid = original.replace("# plow-agent-uid: ", "PLOW_AGENT_UID=")
-            with open(credential, "w") as handle:
-                handle.write(legacy_uid)
+            unsupported = os.path.join(work, "unsupported-credential")
+            content = "PLOW_API_BASE=https://api.example.com\nPLOW_AGENT_TOKEN=unused\nPLOW_AGENT_UID=unsupported-agent\n"
+            with open(unsupported, "w") as handle:
+                handle.write(content)
             Stub.requests.clear()
-            repeated_legacy = run("mint", FREE, cwd=work, base=base, token=token)
-            check("legacy re-mint offers local repair", repeated_legacy.returncode != 0 and "fix-credentials" in repeated_legacy.stderr, True)
-            repaired = run("fix-credentials", cwd=work, base=base, token=token)
-            with open(credential) as handle:
-                check("repair changes only UID syntax", repaired.returncode == 0 and handle.read() == original, True)
-            check("repair and legacy re-mint make no API calls", Stub.requests, [])
-            repaired = run("fix-credentials", cwd=work, base=base, token=token)
-            with open(credential) as handle:
-                check("repair is idempotent", repaired.returncode == 0 and handle.read() == original, True)
-            custom_repair = os.path.join(work, "repair-credential")
-            extra = "# keep this comment=value\nAGENT_ID=index-id\n"
-            with open(custom_repair, "w") as handle:
-                handle.write(legacy_uid + extra)
-            repaired = run("fix-credentials", "--credential-file", custom_repair, cwd=work, base=base, token=token)
-            with open(custom_repair) as handle:
-                check("named repair preserves other settings and comments", repaired.returncode == 0 and handle.read() == original + extra, True)
-            check("repair enforces private mode", os.stat(custom_repair).st_mode & 0o777, 0o600)
-            conflicting = original + "PLOW_AGENT_UID=another-agent\n"
-            with open(custom_repair, "w") as handle:
-                handle.write(conflicting)
-            Stub.requests.clear()
-            for verb in ("fix-credentials", "rotate", "revoke"):
-                refused = run(verb, "--credential-file", custom_repair, cwd=work, base=base, token=token)
-                with open(custom_repair) as handle:
-                    check(f"{verb} refuses conflicting identities without changes", refused.returncode != 0 and "conflicting" in refused.stderr and handle.read() == conflicting and not Stub.requests, True)
+            for verb in ("rotate", "revoke"):
+                refused = run(verb, "--credential-file", unsupported, cwd=work, base=base, token=token)
+                with open(unsupported) as handle:
+                    check(f"{verb} requires comment identity before API calls", refused.returncode != 0 and not Stub.requests and handle.read() == content, True)
+            removed = run("fix-credentials", cwd=work, base=base, token=token)
+            check("repair verb is unavailable", removed.returncode == 2 and "invalid choice" in removed.stderr, True)
             check("credential has mode 600", os.stat(credential).st_mode & 0o777, 0o600)
             check("mint never prints token", "plow_minted99_token" in minted.stdout + minted.stderr, False)
             Stub.requests.clear()
@@ -333,11 +315,6 @@ def main() -> int:
             check("rotation preserves identity", "# plow-agent-uid: d2e048a4cbefdc491657eaddc9c7657a\n" in updated, True)
             check("rotation never prints token", "plow_rotated100_token" in rotated.stdout + rotated.stderr, False)
             check("rotation keeps mode 600", os.stat(credential).st_mode & 0o777, 0o600)
-            with open(credential, "w") as handle:
-                handle.write(updated.replace("# plow-agent-uid: ", "PLOW_AGENT_UID="))
-            legacy_rotated = run("rotate", cwd=work, base=base, token=token)
-            with open(credential) as handle:
-                check("legacy rotation migrates UID to a comment", legacy_rotated.returncode == 0 and handle.read() == updated, True)
             cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
             check("line recovery refuses cloud agents", cloud.returncode != 0 and "delete that agent in Plow" in cloud.stderr, True)
             recovered = run("revoke", SELF_HOSTED, cwd=work, base=base, token=token)
@@ -367,10 +344,6 @@ def main() -> int:
             os.unlink(credential)
         created = run("mint", FREE, cwd=work, base=base, token=token)
         check("create agent for lost-response retry", created.returncode, 0)
-        with open(credential) as handle:
-            legacy_uid = handle.read().replace("# plow-agent-uid: ", "PLOW_AGENT_UID=")
-        with open(credential, "w") as handle:
-            handle.write(legacy_uid)
         Stub.agent_get_status = 404
         Stub.delete_status = 404
         Stub.requests.clear()
@@ -390,7 +363,7 @@ def main() -> int:
             check("invalid container base is refused before mint POST", refused.returncode != 0 and not Stub.requests, True)
             next(row for row in Stub.lines["data"] if row["uid"] == FREE)["agent_uid"] = None
             AGENTS.pop("d2e048a4cbefdc491657eaddc9c7657a", None)
-            content = f"PLOW_API_BASE={bad_base}\nPLOW_AGENT_UID=agt_self_hosted\nPLOW_AGENT_TOKEN=plow_old_token\n"
+            content = f"PLOW_API_BASE={bad_base}\n# plow-agent-uid: agt_self_hosted\nPLOW_AGENT_TOKEN=plow_old_token\n"
             if "\n" not in bad_base:
                 with open(credential, "w") as handle:
                     handle.write(content)

@@ -130,7 +130,7 @@ do not.
 
 If `./plow-credentials` was lost, `plow-agents revoke ln_xxx` retires the
 self-hosted agent (`provider: "self_hosted"`) holding that line. It refuses a cloud agent. It removes the credential file only when the recorded agent UID matches the retired
-agent. A legacy file without that UID, or one naming another agent, stays in
+agent. A file without that UID, or one naming another agent, stays in
 place: confirm which agent it belongs to before removing it manually. Revoking
 a free line fails without touching the file. Both revoke modes first verify
 that the logged-in account owns the agent. If that lookup returns 404, the
@@ -151,13 +151,7 @@ and revocation address the agent directly. `mint` creates an agent with `provide
 replace its credential. `revoke` deletes the agent and frees its line. `plow-credentials.example` shows the file's
 shape with placeholder values.
 
-If an older CLI wrote `PLOW_AGENT_UID=<uid>`, run `plow-agents fix-credentials`
-from the agent directory, then recreate the container. The repair is local,
-atomic, and mode 600; it preserves the token, API base, and other lines without
-calling Plow or creating an agent. Use `--credential-file` for a different path.
-`mint` refuses existing files and points to this repair. Both `rotate` and
-`revoke` accept either UID format; rotation writes the comment format. UID
-metadata must stay in a comment because existing agent images reject unknown
+UID metadata must stay in a comment because existing agent images reject unknown
 credential settings.
 
 An agent credential is restricted to the chosen line, but it has the same role
