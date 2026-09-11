@@ -57,27 +57,17 @@ def upload_photo(api_base: str, token: str, path: str, content: bytes, name: str
     the bytes. Uploading and then PATCHing the name meant a failure at the
     second call left the photo stored and public beside the name it was sent
     to replace, and nothing here could say which half had happened.
+
+    The part's own type is left as octet-stream: Plow reads the signature of
+    the bytes rather than anything the uploader claims, so a guess here would
+    only be a guess. httpx writes the part headers and percent-escapes the
+    filename, so a quote or newline in it cannot rewrite the header around it.
     """
-    # RFC 7578, standard library. A quote, backslash or newline in the filename
-    # would rewrite the header around it, so only a conservative set of
-    # characters survives into it. The part's own type is left as octet-stream:
-    # Plow reads the signature of the bytes rather than anything the uploader
-    # claims, so a guess here would only be a guess.
-    boundary = "----plow-agents-" + os.urandom(16).hex()
-    filename = "".join(c if c.isalnum() or c in "._-" else "_" for c in os.path.basename(path)) or "photo"
-    body = b""
-    if name is not None:
-        body += f'--{boundary}\r\nContent-Disposition: form-data; name="display_name"\r\n\r\n{name}\r\n'.encode()
-    body += (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        "Content-Type: application/octet-stream\r\n\r\n"
-    ).encode() + content + f"\r\n--{boundary}--\r\n".encode()
     return call(
         "POST",
         api_base,
         "/v1/auth/profile/photo",
         token=token,
-        data=body,
-        content_type=f"multipart/form-data; boundary={boundary}",
+        files={"file": (os.path.basename(path) or "photo", content, "application/octet-stream")},
+        form={"display_name": name} if name is not None else None,
     )

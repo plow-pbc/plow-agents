@@ -9,18 +9,22 @@ only credential a container ever sees.
 
 from __future__ import annotations
 
-import json
 import os
 import stat
 import sys
 import tempfile
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import NoReturn
+
+import httpx
 
 DEFAULT_API_BASE = "https://api.plow.co"
 CREDENTIAL_FILE = "plow-credentials"
+TIMEOUT_S = 30
+
+# The transport every request goes through. `None` means a real one; the tests
+# put an `httpx.MockTransport` here so no suite needs a network or a daemon.
+TRANSPORT: httpx.BaseTransport | None = None
 
 
 def log(message: str = "") -> None:
@@ -37,35 +41,30 @@ def request(
     *,
     body: dict | None = None,
     token: str | None = None,
-    data: bytes | None = None,
-    content_type: str | None = None,
+    files: dict | None = None,
+    form: dict | None = None,
 ) -> tuple[int, object]:
     """One call, JSON in by default. Returns (status, parsed body); never raises on HTTP status.
 
-    `data`/`content_type` are for the one request that is not JSON in: the
-    profile photo upload, which sends the file itself.
+    `files`/`form` are for the one request that is not JSON in: the profile
+    photo upload, which sends the file itself.
     """
     headers = {"Accept": "application/json"}
-    if data is None and body is not None:
-        data, content_type = json.dumps(body).encode(), "application/json"
-    if content_type is not None:
-        headers["Content-Type"] = content_type
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    # HTTP is restricted to development hosts; their credentials must bypass proxies.
-    open_url = urllib.request.build_opener(urllib.request.ProxyHandler({})).open if req.type == "http" else urllib.request.urlopen
+    # `trust_env` only for HTTPS. HTTP is restricted to development hosts, and
+    # their credentials must not be handed to whatever `HTTP_PROXY` names --
+    # on a laptop that is frequently an intercepting proxy someone else runs.
+    trust_env = urllib.parse.urlsplit(url).scheme == "https"
     try:
-        with open_url(req, timeout=30) as response:
-            raw, status = response.read(), response.status
-    except urllib.error.HTTPError as error:
-        raw, status = error.read(), error.code
-    except OSError as error:
+        with httpx.Client(transport=TRANSPORT, trust_env=trust_env, timeout=TIMEOUT_S) as client:
+            response = client.request(method, url, headers=headers, json=body, files=files, data=form)
+    except httpx.HTTPError as error:
         die(f"cannot reach {url}: {error}")
     try:
-        return status, json.loads(raw)
+        return response.status_code, response.json()
     except ValueError:
-        return status, None
+        return response.status_code, None
 
 
 def call(method: str, base: str, path: str, **kwargs) -> object:

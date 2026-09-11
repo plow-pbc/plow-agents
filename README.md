@@ -6,18 +6,33 @@ your own machine and Plow only hands it a credential.
 
 Do the steps yourself, or hand this page to an AI coding agent and let it do most of the work.
 
-```sh
-uvx plow-agents --help
-```
-
 ## What you need
 
-- **[uv](https://docs.astral.sh/uv/)** — `plow-agents` runs straight from it, nothing to install.
+- **[uv](https://docs.astral.sh/uv/)** — installs and runs the CLI.
+  `curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`.
+- **Git**, which `uv tool install` uses to fetch this repo.
 - **A phone that can text** — logging in means texting a code from the phone that owns your Plow account.
-- **Docker** — only for the two verbs that build and push an image. `login`, `lines`, `mint` and
-  `deploy` never touch it.
+- **Docker** — only for the two verbs that build and push an image. `login`, `lines`,
+  `mint` and `deploy` never touch it.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
   anonymously, so the image must be public.
+
+You do not need `gh`, a GitHub CLI login, or a Python of your own.
+
+## Install it
+
+`plow-agents` is not on PyPI. Install it from this repository:
+
+```sh
+uv tool install git+https://github.com/plow-pbc/plow-agents
+plow-agents --help
+```
+
+That puts `plow-agents` on your `PATH`. To move to a newer version later:
+
+```sh
+uv tool upgrade plow-agents
+```
 
 ---
 
@@ -30,14 +45,14 @@ it prints. No phone argument is needed. Add `--new-line` if this account holds n
 yet.
 
 ```sh
-uvx plow-agents login
-uvx plow-agents login --new-line    # ... and give me a line to put an agent on
+plow-agents login
+plow-agents login --new-line    # ... and give me a line to put an agent on
 ```
 
 The account token lands in `~/.config/plow/token`, mode 600. It stays on this machine.
 
 ```sh
-uvx plow-agents lines
+plow-agents lines
 ```
 
 ```
@@ -52,7 +67,7 @@ ln_a1b2c3	Ada	+15555550123	free
 One repo, one agent. `init` writes `plow-agents.toml` — the only file that carries that identity.
 
 ```sh
-uvx plow-agents init --slug my-agent --image ghcr.io/you/my-agent
+plow-agents init --slug my-agent --image ghcr.io/you/my-agent
 cat plow-agents.toml
 ```
 
@@ -73,7 +88,7 @@ the `CMD` is PID 1 and runs as uid/gid 10000, it listens on no ports, it reads
 and acts on the answer.
 
 ```sh
-uvx plow-agents image build
+plow-agents image build
 ```
 
 exe.dev runs `linux/amd64`, so that is what gets built, whatever your laptop is.
@@ -103,7 +118,7 @@ aws ecr-public get-login-password --region us-east-1 | docker login --username A
 ## Step 5 — Push it, make it public, and take the digest
 
 ```sh
-uvx plow-agents image push
+plow-agents image push
 ```
 
 Three things happen, in order: the tag is pushed; the digest is read back **with no credentials at
@@ -124,7 +139,7 @@ public from the start, and have no such step.
 Then run the same command again — it is safe to repeat, and this time it gets all the way through:
 
 ```sh
-uvx plow-agents image push
+plow-agents image push
 ```
 
 ```
@@ -151,9 +166,9 @@ answers without asking you to log in. That is the whole test: it is the pull Plo
 ## Step 6 — Deploy it on your own line
 
 ```sh
-uvx plow-agents deploy
-uvx plow-agents deploy --line ln_a1b2c3                  # when more than one line is free
-uvx plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
+plow-agents deploy
+plow-agents deploy --line ln_a1b2c3                  # when more than one line is free
+plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
 ```
 
 With no digest it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
@@ -163,7 +178,7 @@ Plow answers before the machine is built, so `deploy` says *requested* and stops
 is what tells you how it ended:
 
 ```sh
-uvx plow-agents agents
+plow-agents agents
 ```
 
 ```
@@ -187,9 +202,9 @@ Plow mints a credential; the container runs wherever you like, and Plow never re
 ```sh
 git clone https://github.com/plow-pbc/plow-hermes-agent.git
 cd plow-hermes-agent
-uvx plow-agents login
-uvx plow-agents lines
-uvx plow-agents mint ln_a1b2c3
+plow-agents login
+plow-agents lines
+plow-agents mint ln_a1b2c3
 docker compose up --build -d
 ```
 
@@ -200,9 +215,9 @@ then text the line to talk to it.
 Replace the credential without retiring the agent, or retire the agent and take the line back:
 
 ```sh
-uvx plow-agents rotate            # then recreate the container to load it
-uvx plow-agents revoke            # retire the agent named in ./plow-credentials
-uvx plow-agents revoke ln_a1b2c3  # retire whatever self-hosted agent holds that line
+plow-agents rotate            # then recreate the container to load it
+plow-agents revoke            # retire the agent named in ./plow-credentials
+plow-agents revoke ln_a1b2c3  # retire whatever self-hosted agent holds that line
 docker compose down -v
 ```
 
@@ -219,9 +234,9 @@ To build your own: your repository owns `compose.yml` — copy
 hosts, or a public HTTPS URL.
 
 ```sh
-uvx plow-agents profile --name "Ada" --photo ./ada.png
-uvx plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
-uvx plow-agents profile --show
+plow-agents profile --name "Ada" --photo ./ada.png
+plow-agents profile --name "Ada" --photo https://example.com/ada.jpg
+plow-agents profile --show
 ```
 
 # The leaderboard
@@ -290,8 +305,8 @@ uvx --from . plow-agents --help   # the working tree, built and installed as a p
 ```
 
 `uvx --from .` resolves the CLI from *this* directory, so it is for working on the CLI itself.
-Everywhere else — including inside your own agent repo, which has no CLI package in it — the
-command is `uvx plow-agents`.
+Everywhere else — including inside your own agent repo, which has no CLI package in it — install
+it once with `uv tool install git+https://github.com/plow-pbc/plow-agents` and run `plow-agents`.
 
 Neither suite needs Docker, a network, or a Plow account: they drive the real CLI against a local
 stub API and a fake docker runner.
