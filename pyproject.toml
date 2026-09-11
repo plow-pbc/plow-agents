@@ -7,7 +7,6 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
     "typer>=0.12",
-    "rich>=13",
 ]
 
 [project.scripts]

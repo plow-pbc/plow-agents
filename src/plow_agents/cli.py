@@ -19,8 +19,6 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import typer
-from rich.console import Console
-from rich.table import Table
 
 from . import config, images
 from .api import (
@@ -391,7 +389,12 @@ def deploy(
         body={"name": settings.slug or reference.rsplit("/", 1)[-1], "line_uid": line, "provider": f"exe:{reference}@{digest}"},
     )
     agent = created["agent"]
-    log(f"Deployed agent {agent['uid']} on line:{line}.")
+    # Plow answers before the VM is built, so nothing here has seen the agent
+    # boot: the phase arrives as `provisioning` and only `agents` can say how
+    # it ended. Claiming "deployed" put the failure a poll away from a line
+    # that read like success.
+    log(f"Requested agent {agent['uid']} on line:{line} ({agent.get('status') or 'provisioning'}).")
+    log("Run `plow-agents agents` until it is running.")
     print(f"{agent['uid']}\t{line}\t{reference}@{digest}")
 
 
@@ -407,18 +410,26 @@ def _only_free_line(api_base: str, account: str) -> str:
 
 @app.command()
 def agents(ctx: typer.Context) -> None:
-    """What is deployed on this account: line, slug, and the image digest it booted."""
+    """What is deployed on this account: line, slug, status, and the image digest it booted."""
     this = state(ctx)
     deployed = call("GET", this.api_base, "/v1/agents", token=this.token())
     if not deployed:
         log("Nothing deployed on this account.")
         return
-    table = Table("LINE", "SLUG", "IMAGE", box=None, pad_edge=False)
+    # Tab-separated, like `lines`: a digest is 71 characters and the whole
+    # point of this verb, and a table that fits the terminal ellipsizes it.
+    print("LINE\tSLUG\tSTATUS\tIMAGE")
     for agent in sorted(deployed, key=lambda agent: agent["uid"]):
         provider = agent.get("provider") or ""
         # `exe:<slug>` names a listing; `exe:<image>@sha256:...` names an image
         # directly and has no slug to show. Anything else is self-hosted.
         target = provider.removeprefix("exe:") if provider.startswith("exe:") else ""
         slug = target if target and "@" not in target else ("-" if target else provider)
-        table.add_row(agent.get("line", {}).get("uid") or "-", slug, agent.get("image") or "-")
-    Console().print(table)
+        # This is the only verb that can say an agent never came up. Plow
+        # answered `deploy` before the VM existed, so a `failed` here is the
+        # first and only place the person sees it -- with the failure category
+        # beside it, which is what says whether to retry or fix the image.
+        status = agent.get("status") or "-"
+        if agent.get("failure_code"):
+            status = f"{status} ({agent['failure_code']})"
+        print(f"{agent.get('line', {}).get('uid') or '-'}\t{slug}\t{status}\t{agent.get('image') or '-'}")

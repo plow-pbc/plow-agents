@@ -77,14 +77,20 @@ def record_last_pushed(path: str, digest: str) -> None:
     """
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         die(f"refusing to record a digest that is not sha256:<64 hex>: {digest}")
-    line = f'last_pushed = "{digest}"'
     try:
         with open(path) as handle:
             body = handle.read()
     except FileNotFoundError:
         body = ""
-    replaced, count = re.subn(r"(?m)^last_pushed\s*=.*$", line, body)
+    # TOML ignores leading whitespace, so an indented `last_pushed` is the same
+    # key; matching only at column zero appended a second one and left the file
+    # with two. The indentation the person wrote is kept.
+    replaced, count = re.subn(
+        r"(?m)^([ \t]*)last_pushed[ \t]*=.*$",
+        lambda found: f'{found.group(1)}last_pushed = "{digest}"',
+        body,
+    )
     if not count:
-        replaced = (body.rstrip("\n") + "\n" if body.strip() else "") + line + "\n"
+        replaced = (body.rstrip("\n") + "\n" if body.strip() else "") + f'last_pushed = "{digest}"\n'
     with open(path, "w") as handle:
         handle.write(replaced)

@@ -73,26 +73,63 @@ the `CMD` is PID 1 and runs as uid/gid 10000, it listens on no ports, it reads
 and acts on the answer.
 
 ```sh
-uvx --from . plow-agents image build
+uvx plow-agents image build
 ```
 
 exe.dev runs `linux/amd64`, so that is what gets built, whatever your laptop is.
 
 **Checkpoint:** `docker images ghcr.io/you/my-agent` lists the tag.
 
-## Step 4 — Push it, and take the digest
+## Step 4 — Log in to the registry
+
+You push with credentials; Plow pulls with none. Both halves have to be true, and the second one
+is the step people skip.
+
+On ghcr.io, log in with a personal access token carrying the `write:packages` scope — make one at
+<https://github.com/settings/tokens/new?scopes=write:packages>:
 
 ```sh
-uvx --from . plow-agents image push
+echo "$GHCR_TOKEN" | docker login ghcr.io --username you --password-stdin
 ```
 
+Docker Hub is `docker login`. ECR Public is:
+
+```sh
+aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
 ```
-ghcr.io/you/my-agent@sha256:3f0e...c19a
+
+**Checkpoint:** `docker login` printed `Login Succeeded`.
+
+## Step 5 — Push it, make it public, and take the digest
+
+```sh
+uvx plow-agents image push
 ```
 
 Three things happen, in order: the tag is pushed; the digest is read back **with no credentials at
 all**, which is the same anonymous pull Plow will do; and `last_pushed` is written into
 `plow-agents.toml`.
+
+On a first push to ghcr this stops at the second one, because **a brand-new ghcr package is
+private**. The package does not exist until you have pushed, so it cannot be made public any
+earlier. Do it now:
+
+1. Open `https://github.com/users/you/packages/container/my-agent/settings`
+   (an organisation's is `https://github.com/orgs/your-org/packages/container/my-agent/settings`).
+2. **Danger Zone → Change visibility → Public.**
+
+On Docker Hub the switch is on the repository's **Settings** tab. ECR Public repositories are
+public from the start, and have no such step.
+
+Then run the same command again — it is safe to repeat, and this time it gets all the way through:
+
+```sh
+uvx plow-agents image push
+```
+
+```
+ghcr.io/you/my-agent@sha256:3f0e...c19a
+```
 
 ```toml
 slug = "my-agent"
@@ -109,39 +146,37 @@ accepts, and the only thing that says which bytes booted.
 DOCKER_CONFIG=$(mktemp -d) docker manifest inspect ghcr.io/you/my-agent@sha256:3f0e...c19a
 ```
 
-answers without asking you to log in.
+answers without asking you to log in. That is the whole test: it is the pull Plow does.
 
-## Step 5 — Deploy it on your own line
+## Step 6 — Deploy it on your own line
 
 ```sh
-uvx --from . plow-agents deploy
-uvx --from . plow-agents deploy --line ln_a1b2c3                  # when more than one line is free
-uvx --from . plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
+uvx plow-agents deploy
+uvx plow-agents deploy --line ln_a1b2c3                  # when more than one line is free
+uvx plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
 ```
 
 With no digest it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
 refuses if there is more than one rather than picking.
 
-```sh
-uvx --from . plow-agents agents
-```
-
-```
-LINE        SLUG       IMAGE
-ln_a1b2c3   -          ghcr.io/you/my-agent@sha256:3f0e...c19a
-```
-
-**Checkpoint:** text the line's number. Your agent answers.
-
-## Step 6 — Ship a new version
-
-Same three commands. The digest changes; nothing else does.
+Plow answers before the machine is built, so `deploy` says *requested* and stops there. `agents`
+is what tells you how it ended:
 
 ```sh
-uvx --from . plow-agents image build
-uvx --from . plow-agents image push
-uvx --from . plow-agents deploy
+uvx plow-agents agents
 ```
+
+```
+LINE	SLUG	STATUS	IMAGE
+ln_a1b2c3	-	provisioning	ghcr.io/you/my-agent@sha256:3f0e...c19a
+```
+
+Run it again until `STATUS` is `running`. A `failed` carries Plow's reason beside it:
+`failed (image_pull_timeout)` is a pull that never finished — usually a cold image, sometimes a
+private one, so re-check Step 5. `failed (setup_failed)` means the container came up and your
+agent did not, which is the image, not the deploy.
+
+**Checkpoint:** `agents` shows `running`, and texting the line's number gets an answer.
 
 ---
 
@@ -212,6 +247,10 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
   that reason; if you build an index some other way, `image push` will say so.
 - **One line, one agent.** `mint` and `deploy` both refuse a line that already answers. Retire the
   agent holding it first — that is a decision, so there is no flag for it.
+- **There is no upgrade in place yet.** `deploy` creates an agent; it does not repoint one. A new
+  digest on the same line means deleting the running agent first, and `revoke` refuses a cloud
+  agent — so today that deletion happens in Plow, and then `image build` → `image push` → `deploy`
+  runs again. A verb for it is not in this release.
 - **`login` is per-account, not per-agent.** The account token can list lines, mint, rotate,
   revoke and deploy. It never enters a container; only a minted credential does.
 - **`down -v` is not the same as `down`.** `down` keeps a self-hosted agent's memory; `down -v`
@@ -232,7 +271,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [DIGEST] [--line] [--image]` | Run a pushed digest on one of your lines. |
-| `agents` | What is deployed on this account: line, slug, image digest. |
+| `agents` | What is deployed on this account: line, slug, status, image digest. |
 | `mint <line>` | A self-hosted credential for one line, into `./plow-credentials`. |
 | `rotate` | Replace that credential. |
 | `revoke [line]` | Retire a self-hosted agent, by credential file or by line. |
@@ -245,9 +284,14 @@ comment — see [the example](plow-credentials.example).
 # Working on this repo
 
 ```sh
-just            # lint, then both smoke suites
-uv run plow-agents --help
+just                              # lint, then both smoke suites
+uv run plow-agents --help         # the working tree, through its own venv
+uvx --from . plow-agents --help   # the working tree, built and installed as a package
 ```
+
+`uvx --from .` resolves the CLI from *this* directory, so it is for working on the CLI itself.
+Everywhere else — including inside your own agent repo, which has no CLI package in it — the
+command is `uvx plow-agents`.
 
 Neither suite needs Docker, a network, or a Plow account: they drive the real CLI against a local
 stub API and a fake docker runner.

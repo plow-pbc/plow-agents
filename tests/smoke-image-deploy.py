@@ -37,8 +37,10 @@ class Stub(BaseHTTPRequestHandler):
     chats = {"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": uid}}]}
                       for uid in (FREE, HELD)]}
     agents = [
-        {"uid": "agt_held", "provider": "exe:life", "line": {"uid": HELD}, "image": f"ghcr.io/plow-pbc/life@{SHA}"},
-        {"uid": "agt_direct", "provider": f"exe:{IMAGE}@{SHA}", "line": {"uid": FREE}, "image": f"{IMAGE}@{SHA}"},
+        {"uid": "agt_held", "provider": "exe:life", "line": {"uid": HELD}, "image": f"ghcr.io/plow-pbc/life@{SHA}",
+         "status": "running", "failure_code": None},
+        {"uid": "agt_direct", "provider": f"exe:{IMAGE}@{SHA}", "line": {"uid": FREE}, "image": f"{IMAGE}@{SHA}",
+         "status": "failed", "failure_code": "image_pull_timeout"},
     ]
 
     def _send(self, status: int, payload: object) -> None:
@@ -65,7 +67,8 @@ class Stub(BaseHTTPRequestHandler):
             held = next((row for row in Stub.lines["data"] if row["uid"] == body["line_uid"]), {}).get("agent_uid")
             if held:
                 return self._send(409, {"detail": {"code": "AGENT_EXISTS", "message": f"line already answers as {held}"}})
-            return self._send(201, {"agent": {"uid": "agt_new", "provider": body["provider"]}, "token": None})
+            agent = {"uid": "agt_new", "provider": body["provider"], "line": {"uid": body["line_uid"]}, "status": "provisioning"}
+            return self._send(201, {"agent": agent, "token": None})
         self._send(404, {"detail": self.path})
 
     def log_message(self, *_: object) -> None:
@@ -181,15 +184,28 @@ def main() -> int:
         check("a second push replaces last_pushed rather than appending", config.load(work).last_pushed, second)
         with open(toml) as handle:
             check("leaving exactly one last_pushed line", handle.read().count("last_pushed"), 1)
+        # TOML ignores leading whitespace, so an indented key is the same key.
+        indented = os.path.join(work, "indented", config.CONFIG_FILE)
+        os.makedirs(os.path.dirname(indented))
+        with open(indented, "w") as handle:
+            handle.write(f'slug = "x"\nimage = "{IMAGE}"\n  last_pushed = "{SHA}"\n')
+        config.record_last_pushed(indented, second)
+        with open(indented) as handle:
+            written = handle.read()
+        check("an indented last_pushed is replaced, not duplicated", written.count("last_pushed"), 1)
+        check("and the indentation is kept", '  last_pushed = ' in written, True)
+        check("and the new digest is what the file now reads", config.load(os.path.dirname(indented)).last_pushed, second)
         config.record_last_pushed(toml, SHA)
 
         # --- deploy ---------------------------------------------------------
         Stub.created.clear()
-        code, out, _ = run("deploy", cwd=work, base=base, token=token)
+        code, out, err = run("deploy", cwd=work, base=base, token=token)
         check("deploy exits 0", code, 0)
         check("deploy sends the digest-pinned image as the provider", Stub.created[-1],
               {"name": "reference", "line_uid": FREE, "provider": f"exe:{IMAGE}@{SHA}"})
-        check("deploy prints the line and the reference it booted", out.strip().split("\t"), ["agt_new", FREE, f"{IMAGE}@{SHA}"])
+        check("deploy prints the line and the reference it asked for", out.strip().split("\t"), ["agt_new", FREE, f"{IMAGE}@{SHA}"])
+        check("deploy says requested, not deployed, and names the phase", ("Requested agent agt_new" in err, "provisioning" in err), (True, True))
+        check("deploy does not claim the agent is up", "Deployed" in err, False)
 
         Stub.created.clear()
         explicit = "sha256:" + "ef" * 32
@@ -223,8 +239,13 @@ def main() -> int:
         # --- agents ---------------------------------------------------------
         code, out, _ = run("agents", cwd=work, base=base, token=token)
         check("agents exits 0", code, 0)
-        check("agents shows a listing deploy by slug", "life" in out and HELD in out, True)
-        check("agents shows a direct image deploy by its digest", f"{IMAGE}@{SHA}" in out or SHA[:20] in out, True)
+        rows = {row.split("\t")[0]: row.split("\t") for row in out.splitlines()[1:]}
+        check("agents heads its columns", out.splitlines()[0], "LINE\tSLUG\tSTATUS\tIMAGE")
+        check("agents shows a listing deploy by slug, running", rows.get(HELD), [HELD, "life", "running", f"ghcr.io/plow-pbc/life@{SHA}"])
+        # A digest is 71 characters. A table sized to the terminal ellipsised
+        # it, which is the one field of this verb nobody can retype.
+        check("agents shows a direct image deploy by its whole digest, and why it failed",
+              rows.get(FREE), [FREE, "-", "failed (image_pull_timeout)", f"{IMAGE}@{SHA}"])
 
     server.shutdown()
     for failure in failures:
