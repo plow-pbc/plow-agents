@@ -4,3 +4,6 @@
 /.env
 __pycache__/
 *.py[co]
+# uv's virtualenv and build output.
+/.venv/
+/dist/

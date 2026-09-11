@@ -12,9 +12,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import runpy
-import socket
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -22,7 +21,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
-CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+sys.path.insert(0, SRC)
+
+from plow_agents.api import request as cli_request  # noqa: E402
+from plow_agents.cli import app as cli_app  # noqa: E402
 
 FREE, CLOUD, SELF_HOSTED = "ln_free", "ln_cloud", "ln_self_hosted"
 PHOTO_URL = "https://api.example.com/v1/profile-photos/2b0f9c1e-0000-4000-8000-000000000001"
@@ -153,7 +156,10 @@ class Proxy(BaseHTTPRequestHandler):
 
 
 def run(*argv: str, cwd: str, base: str, token: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, CLI, "--api-base", base, "--token-file", token, *argv], cwd=cwd, env=env, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "-m", "plow_agents", "--api-base", base, "--token-file", token, *argv],
+        cwd=cwd, env={**(env if env is not None else os.environ), "PYTHONPATH": SRC}, capture_output=True, text=True,
+    )
 
 
 def main() -> int:
@@ -302,7 +308,7 @@ def main() -> int:
                 with open(unsupported) as handle:
                     check(f"{verb} requires comment identity before API calls", refused.returncode != 0 and not Stub.requests and handle.read() == content, True)
             removed = run("fix-credentials", cwd=work, base=base, token=token)
-            check("repair verb is unavailable", removed.returncode == 2 and "invalid choice" in removed.stderr, True)
+            check("repair verb is unavailable", removed.returncode == 2 and "No such command" in removed.stderr, True)
             check("credential has mode 600", os.stat(credential).st_mode & 0o777, 0o600)
             check("mint never prints token", "plow_minted99_token" in minted.stdout + minted.stderr, False)
             Stub.requests.clear()
@@ -384,7 +390,6 @@ def main() -> int:
         Stub.requests.clear()
         refused = run("mint", FREE, cwd=work, base=base+'"', token=token)
         check("invalid host API base is refused without requests", refused.returncode != 0 and not Stub.requests, True)
-        cli_main = runpy.run_path(CLI)["main"]
         for root, permitted in (
             ("https://api.example.com", True),
             ("http://localhost:8000", True),
@@ -398,18 +403,18 @@ def main() -> int:
         ):
             response = io.BytesIO(b'{"data": []}')
             response.status = 200
-            argv = [CLI, "--api-base", root, "--token-file", token, "lines"]
+            argv = ["plow-agents", "--api-base", root, "--token-file", token, "lines"]
             with patch.object(sys, "argv", argv), patch("urllib.request.OpenerDirector.open", return_value=response) as transport:
                 with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
                     try:
-                        code = cli_main()
+                        cli_app()
+                        code = 0
                     except SystemExit as error:
-                        code = error.code
+                        code = error.code or 0
             check(f"account token transport policy for {root}", (code == 0, transport.called), (permitted, permitted))
         proxy = HTTPServer(("127.0.0.1", 0), Proxy)
         threading.Thread(target=proxy.serve_forever, daemon=True).start()
         proxy_url = f"http://127.0.0.1:{proxy.server_address[1]}"
-        cli_request = runpy.run_path(CLI)["request"]
         resolve = socket.getaddrinfo
         proxy_env = {"http_proxy": proxy_url, "HTTP_PROXY": proxy_url, "no_proxy": "", "NO_PROXY": ""}
         try:
