@@ -1,0 +1,28 @@
+# Build, check and publish this agent on a tag push.
+#
+# The digest is the only reference Plow accepts, so the tag here is a handle
+# and nothing more. Make the package public once, after the first run: a new
+# ghcr package is private, and Plow pulls anonymously.
+name: Publish
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # plow-agents is not on PyPI; it installs from its own repository.
+      - run: uv tool install git+https://github.com/plow-pbc/plow-agents
+      - name: Log in to ghcr
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - run: plow-agents image build
+      - run: plow-agents image check
+      - run: plow-agents image push
+      # A fourth step pins the pushed digest on your Agent Index listing.
+      # `plow-agents listing pin` is not released yet; until it is, pin from
+      # the listing page and this workflow stops at the push.

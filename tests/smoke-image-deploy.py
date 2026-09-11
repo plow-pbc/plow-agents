@@ -135,14 +135,15 @@ def main() -> int:
 
         # --- plow-agents.toml: the unit of identity -------------------------
         code, _, _ = run("init", "--slug", "reference", "--image", IMAGE, cwd=work, base=base, token=token)
-        check("init writes plow-agents.toml", (code, os.path.isfile(toml)), (0, True))
+        check("init writes a repo, plow-agents.toml included",
+              (code, os.path.isfile(toml), os.path.isfile(os.path.join(work, "agent.py"))), (0, True, True))
         check("toml read gives slug and image", (config.load(work).slug, config.load(work).image), ("reference", IMAGE))
         check("toml has no digest before a push", config.load(work).last_pushed, "")
         check("--image overrides the toml without writing it",
               (config.load(work, image="ghcr.io/other/x").image, config.load(work).image), ("ghcr.io/other/x", IMAGE))
         check("--slug overrides the toml", config.load(work, slug="other").slug, "other")
         code, _, err = run("init", cwd=work, base=base, token=token)
-        check("init refuses to overwrite an existing toml", (code != 0, "already exists" in err), (True, True))
+        check("init refuses to write over an existing repo", (code != 0, "does not merge" in err), (True, True))
 
         missing = os.path.join(work, "elsewhere")
         os.makedirs(missing)

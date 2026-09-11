@@ -7,3 +7,4 @@ lint:
 test:
     uv run python tests/smoke-line-in-use.py
     uv run python tests/smoke-image-deploy.py
+    uv run python tests/smoke-image-check.py

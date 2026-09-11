@@ -12,7 +12,7 @@ Do the steps yourself, or hand this page to an AI coding agent and let it do mos
   `curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`.
 - **Git**, which `uv tool install` uses to fetch this repo.
 - **A phone that can text** — logging in means texting a code from the phone that owns your Plow account.
-- **Docker** — only for the two verbs that build and push an image. `login`, `lines`,
+- **Docker** — only for the three verbs that build, check and push an image. `login`, `lines`,
   `mint` and `deploy` never touch it.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
   anonymously, so the image must be public.
@@ -62,13 +62,22 @@ ln_a1b2c3	Ada	+15555550123	free
 
 **Checkpoint:** `lines` printed at least one line whose `STATUS` is `free`.
 
-## Step 2 — Say which agent this repo is
+## Step 2 — Start a repo
 
-One repo, one agent. `init` writes `plow-agents.toml` — the only file that carries that identity.
+One repo, one agent. `init` writes a working one: a reference agent, a Dockerfile that satisfies
+the contract, a GitHub Action, and `plow-agents.toml` — the file that carries the identity.
 
 ```sh
-plow-agents init --slug my-agent --image ghcr.io/you/my-agent
-cat plow-agents.toml
+plow-agents init --slug my-agent --image ghcr.io/you/my-agent my-agent
+cd my-agent
+```
+
+```
+agent.py                        the whole agent, ~150 lines, no framework
+Dockerfile                      python:3.13-slim, uid 10000, no ports
+plow-agents.toml                slug and image
+.github/workflows/publish.yml   build, check, push on a v* tag
+README.md                       what to edit
 ```
 
 ```toml
@@ -79,13 +88,24 @@ image = "ghcr.io/you/my-agent"
 `image` is a repository with no tag. Every `image` verb reads this file from the working
 directory; `--slug` and `--image` override it for one run without writing to it.
 
-## Step 3 — Build the image
+`init` refuses to write over an existing repo — it starts one, it does not merge into one.
 
-Your repo needs a `Dockerfile`. It must satisfy the container contract in
+## Step 3 — Make it yours
+
+`agent.py` is the agent. One function is the part you replace:
+
+```python
+def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
+    """What to say back, or None to stay quiet. This is the part you replace."""
+```
+
+Everything above it is the contract in
 [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md):
-the `CMD` is PID 1 and runs as uid/gid 10000, it listens on no ports, it reads
-`/var/lib/plow/credentials`, and on every boot it calls `GET {PLOW_API_BASE}/v1/agents/cloud/me`
-and acts on the answer.
+read `/var/lib/plow/credentials`, drop to uid 10000, call
+`GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot, open the chat WebSocket, answer, and exit
+on SIGTERM. Any image that does those things works — the reference agent is one, not the one.
+
+## Step 4 — Build the image
 
 ```sh
 plow-agents image build
@@ -95,7 +115,39 @@ exe.dev runs `linux/amd64`, so that is what gets built, whatever your laptop is.
 
 **Checkpoint:** `docker images ghcr.io/you/my-agent` lists the tag.
 
-## Step 4 — Log in to the registry
+## Step 5 — Check it against the contract
+
+```sh
+plow-agents image check
+```
+
+This is the step that saves a failed deploy. It runs your built image the way exe.dev will —
+no command override, a credentials file copied in as root at mode 0600, a stub Plow on this
+machine — and asserts, in order:
+
+```
+  ok   the image has a CMD to run as PID 1
+  ok   the image declares no listening ports
+  ok   the agent calls GET /v1/agents/cloud/me with its token
+  ok   the agent presents the token from the credentials file
+  ok   the agent runs as uid 10000
+  ok   the agent opens the chat WebSocket
+  ok   the agent replies to one message
+  ok   the agent exits cleanly on SIGTERM
+```
+
+It stops at the first failure and names it, because a container that never read its credential
+has nothing to say about whether it would have answered a message:
+
+```
+plow-agents: ghcr.io/you/my-agent:latest does not satisfy the contract.
+  FAILED: the agent runs as uid 10000
+  saw:    the only uid(s) running are 0
+```
+
+**Checkpoint:** every assertion passes.
+
+## Step 6 — Log in to the registry
 
 You push with credentials; Plow pulls with none. Both halves have to be true, and the second one
 is the step people skip.
@@ -115,7 +167,7 @@ aws ecr-public get-login-password --region us-east-1 | docker login --username A
 
 **Checkpoint:** `docker login` printed `Login Succeeded`.
 
-## Step 5 — Push it, make it public, and take the digest
+## Step 7 — Push it, make it public, and take the digest
 
 ```sh
 plow-agents image push
@@ -163,7 +215,7 @@ DOCKER_CONFIG=$(mktemp -d) docker manifest inspect ghcr.io/you/my-agent@sha256:3
 
 answers without asking you to log in. That is the whole test: it is the pull Plow does.
 
-## Step 6 — Deploy it on your own line
+## Step 8 — Deploy it on your own line
 
 ```sh
 plow-agents deploy
@@ -188,7 +240,7 @@ ln_a1b2c3	-	provisioning	ghcr.io/you/my-agent@sha256:3f0e...c19a
 
 Run it again until `STATUS` is `running`. A `failed` carries Plow's reason beside it:
 `failed (image_pull_timeout)` is a pull that never finished — usually a cold image, sometimes a
-private one, so re-check Step 5. `failed (setup_failed)` means the container came up and your
+private one, so re-check Step 7. `failed (setup_failed)` means the container came up and your
 agent did not, which is the image, not the deploy.
 
 **Checkpoint:** `agents` shows `running`, and texting the line's number gets an answer.
@@ -254,6 +306,15 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
 # Sharp edges
 
+- **`image check` serves a stub Plow on every interface** for the length of the run, because the
+  container has to reach it. Its token is random per run and dies with the check, but on a shared
+  network that port is briefly open.
+- **`image check` cannot see inside your image.** It asserts what is observable from outside: the
+  declared CMD and ports, which uid the processes run as, what the agent said to Plow, and how it
+  exited. An image that passes still has to be right.
+- **PID 1 starts as root, and that is correct.** Plow writes the credential root-owned `0600`, so
+  an image with `USER 10000` cannot read its own credential. Read it as root and drop privileges
+  — the reference agent does it in one function.
 - **A tag is never a reference.** Plow refuses anything but `name@sha256:…`. `deploy latest` is an
   error, not a convenience.
 - **The image must be public.** `image push` reads the digest back through an empty Docker config
@@ -282,8 +343,9 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `login [--new-line]` | Text a code to log in; optionally be given an assistant line. |
 | `lines` | The lines this account holds, and who answers on each. Pick a `free` one. |
 | `profile [--name] [--photo] [--show]` | Set or show your public profile. |
-| `init [--slug] [--image]` | Write `plow-agents.toml`. |
+| `init [--slug] [--image] [DIR]` | Start an agent repo: reference agent, Dockerfile, Action, toml. |
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
+| `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will, and assert the contract. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [DIGEST] [--line] [--image]` | Run a pushed digest on one of your lines. |
 | `agents` | What is deployed on this account: line, slug, status, image digest. |

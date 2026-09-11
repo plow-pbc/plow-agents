@@ -1,0 +1,4 @@
+# A live bearer token.
+/plow-credentials
+__pycache__/
+*.py[co]

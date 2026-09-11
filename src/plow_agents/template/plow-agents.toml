@@ -1,0 +1,4 @@
+# The one file that says which agent this repo is.
+# `slug` is the listing slug on the Agent Index; `image` is where you push.
+slug = ""
+image = ""
