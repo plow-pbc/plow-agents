@@ -12,9 +12,8 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import runpy
-import socket
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -22,7 +21,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
-CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
+SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+sys.path.insert(0, SRC)
+
+import httpx  # noqa: E402
+
+from plow_agents import api as cli_api  # noqa: E402
+from plow_agents.api import request as cli_request  # noqa: E402
+from plow_agents.cli import app as cli_app  # noqa: E402
 
 FREE, CLOUD, SELF_HOSTED = "ln_free", "ln_cloud", "ln_self_hosted"
 PHOTO_URL = "https://api.example.com/v1/profile-photos/2b0f9c1e-0000-4000-8000-000000000001"
@@ -148,12 +154,20 @@ class Proxy(BaseHTTPRequestHandler):
 
     do_POST = do_GET
 
+    def do_CONNECT(self) -> None:  # noqa: N802 -- how an https request reaches a proxy
+        Proxy.received.append((self.path, self.headers.get("Authorization"), b""))
+        self.send_response(501)
+        self.end_headers()
+
     def log_message(self, *_: object) -> None:
         pass
 
 
 def run(*argv: str, cwd: str, base: str, token: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, CLI, "--api-base", base, "--token-file", token, *argv], cwd=cwd, env=env, capture_output=True, text=True)
+    return subprocess.run(
+        [sys.executable, "-m", "plow_agents", "--api-base", base, "--token-file", token, *argv],
+        cwd=cwd, env={**(env if env is not None else os.environ), "PYTHONPATH": SRC}, capture_output=True, text=True,
+    )
 
 
 def main() -> int:
@@ -199,8 +213,24 @@ def main() -> int:
         check("a local file exits 0", uploaded.returncode, 0)
         check("and is exactly one request", Stub.requests, ["POST /v1/auth/profile/photo"])
         check("with the file's own bytes", Stub.photo_uploads[-1]["file"][1], b"\x89PNG\r\n\x1a\nada")
-        check("under a filename with nothing that could break the header", 'filename="ada_photo.png"' in Stub.photo_uploads[-1]["file"][0], True)
+        check("under the file's own name", 'filename="ada photo.png"' in Stub.photo_uploads[-1]["file"][0], True)
         check("and prints the profile the route answered with", json.loads(uploaded.stdout)["photo_url"], PHOTO_URL)
+
+        # A quote in a filename would end the header's quoted string early and
+        # let the rest of the name write headers of its own. It arrives escaped.
+        hostile = os.path.join(work, 'ada"; name="display_name.png')
+        with open(hostile, "wb") as handle:
+            handle.write(b"\x89PNG\r\n\x1a\nada")
+        Stub.requests.clear()
+        escaped = run("profile", "--photo", hostile, cwd=work, base=base, token=token)
+        disposition = Stub.photo_uploads[-1]["file"][0]
+        # The name tried to close the quoted string and open a second form
+        # field. Escaped, it stays one field, called what it was sent as.
+        check("a quote in a filename cannot inject a second form field",
+              (escaped.returncode, 'filename="ada%22; name=%22display_name.png"' in disposition,
+               '; name="display_name"' in disposition, sorted(Stub.photo_uploads[-1])),
+              (0, True, False, ["file"]))
+        check("and the upload is still exactly one request", Stub.requests, ["POST /v1/auth/profile/photo"])
 
         # A name alongside a file rides in the same request, because the route
         # writes both as it stores the bytes. Two calls meant a failure at the
@@ -302,7 +332,7 @@ def main() -> int:
                 with open(unsupported) as handle:
                     check(f"{verb} requires comment identity before API calls", refused.returncode != 0 and not Stub.requests and handle.read() == content, True)
             removed = run("fix-credentials", cwd=work, base=base, token=token)
-            check("repair verb is unavailable", removed.returncode == 2 and "invalid choice" in removed.stderr, True)
+            check("repair verb is unavailable", removed.returncode == 2 and "No such command" in removed.stderr, True)
             check("credential has mode 600", os.stat(credential).st_mode & 0o777, 0o600)
             check("mint never prints token", "plow_minted99_token" in minted.stdout + minted.stderr, False)
             Stub.requests.clear()
@@ -384,7 +414,6 @@ def main() -> int:
         Stub.requests.clear()
         refused = run("mint", FREE, cwd=work, base=base+'"', token=token)
         check("invalid host API base is refused without requests", refused.returncode != 0 and not Stub.requests, True)
-        cli_main = runpy.run_path(CLI)["main"]
         for root, permitted in (
             ("https://api.example.com", True),
             ("http://localhost:8000", True),
@@ -396,24 +425,31 @@ def main() -> int:
             ("http://api.orb.local.example.com", False),
             ("http://localhost@api.example.com", False),
         ):
-            response = io.BytesIO(b'{"data": []}')
-            response.status = 200
-            argv = [CLI, "--api-base", root, "--token-file", token, "lines"]
-            with patch.object(sys, "argv", argv), patch("urllib.request.OpenerDirector.open", return_value=response) as transport:
+            reached = []
+
+            def answer(request, reached=reached):
+                reached.append(str(request.url))
+                return httpx.Response(200, json={"data": []})
+
+            argv = ["plow-agents", "--api-base", root, "--token-file", token, "lines"]
+            with patch.object(sys, "argv", argv), patch.object(cli_api, "TRANSPORT", httpx.MockTransport(answer)):
                 with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
                     try:
-                        code = cli_main()
+                        cli_app()
+                        code = 0
                     except SystemExit as error:
-                        code = error.code
-            check(f"account token transport policy for {root}", (code == 0, transport.called), (permitted, permitted))
+                        code = error.code or 0
+            check(f"account token transport policy for {root}", (code == 0, bool(reached)), (permitted, permitted))
         proxy = HTTPServer(("127.0.0.1", 0), Proxy)
         threading.Thread(target=proxy.serve_forever, daemon=True).start()
         proxy_url = f"http://127.0.0.1:{proxy.server_address[1]}"
-        cli_request = runpy.run_path(CLI)["request"]
         resolve = socket.getaddrinfo
-        proxy_env = {"http_proxy": proxy_url, "HTTP_PROXY": proxy_url, "no_proxy": "", "NO_PROXY": ""}
+        # Every spelling a client library reads, so this is the environment a
+        # corporate laptop actually has, not one flag's worth of it.
+        proxy_env = {"http_proxy": proxy_url, "HTTP_PROXY": proxy_url, "all_proxy": proxy_url,
+                     "ALL_PROXY": proxy_url, "no_proxy": "", "NO_PROXY": ""}
         try:
-            with patch.dict(os.environ, proxy_env), patch("urllib.request._opener", None), patch("urllib.request.proxy_bypass", return_value=False):
+            with patch.dict(os.environ, proxy_env):
                 for host in ("localhost", "127.0.0.1", "[::1]", "api.orb.local"):
                     dev_root = f"http://{host}:{server.server_address[1]}"
                     Stub.requests.clear()
@@ -422,6 +458,17 @@ def main() -> int:
                         cli_request("POST", dev_root + "/v1/auth/activate/redeem", body={"activation_secret": "synthetic_activation_secret"})
                     check(f"{host} sends both secrets directly to the origin", Stub.requests, ["GET /v1/lines", "POST /v1/auth/activate/redeem"])
                 check("configured proxy receives no request or secret", Proxy.received, [])
+                # The same environment, and an https root: there the proxy is
+                # the operator's choice to make, so it must still be honoured.
+                Proxy.received.clear()
+                try:
+                    cli_request("GET", "https://api.example.com/v1/lines", token="synthetic_account_token")
+                except SystemExit:
+                    pass          # the toy proxy refuses the tunnel; reaching it is the point
+                check("an https root still honours a configured proxy",
+                      [path for path, _, _ in Proxy.received], ["api.example.com:443"])
+                check("and the CONNECT carries no Authorization header",
+                      [auth for _, auth, _ in Proxy.received], [None])
         finally:
             proxy.shutdown()
             proxy.server_close()
