@@ -77,9 +77,12 @@ def verify_public(image: str, digest: str) -> None:
 def registry_of(image: str) -> tuple[str, str]:
     """(registry host, repository name), by docker's own rule for which is which."""
     first, _, rest = image.partition("/")
-    if rest and ("." in first or ":" in first or first == "localhost"):
+    if rest and ("." in first or ":" in first or first == "localhost") and first != "docker.io":
         return first, rest
-    return "registry-1.docker.io", image if "/" in image else f"library/{image}"
+    # Docker Hub: `docker.io` is its name, not its API host, and a one-part
+    # repository is an official image under `library/`.
+    name = rest if first == "docker.io" and rest else image
+    return "registry-1.docker.io", name if "/" in name else f"library/{name}"
 
 
 def _anonymous_token(client: httpx.Client, challenge: str, name: str) -> str | None:
