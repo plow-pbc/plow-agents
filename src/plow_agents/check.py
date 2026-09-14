@@ -151,8 +151,7 @@ def _non_agent_processes(runner: Runner, container: str) -> list[str]:
     contract lets be root is the one that has to read the file.
     """
     init = _inspect(runner, container, "{{.State.Pid}}").strip()
-    stdout = run(runner, ["docker", "top", container, "-o", "pid,uid,args"], what=f"top of {container}")
-    rows = [row.split(None, 2) for row in stdout.splitlines()[1:] if row.strip()]
+    rows = _top(runner, container)
     if not rows:
         return ["docker top listed no processes at all"]
     strays = [f"pid {row[0]} is uid {row[1]}: {row[2] if len(row) > 2 else '?'}"
@@ -160,6 +159,21 @@ def _non_agent_processes(runner: Runner, container: str) -> list[str]:
     if not strays and not any(len(row) >= 2 and row[1] == AGENT_UID for row in rows):
         return [f"no process runs as uid {AGENT_UID} -- the only one is PID 1, as uid {rows[0][1]}"]
     return strays
+
+
+def _top(runner: Runner, container: str) -> list[list[str]]:
+    """`[pid, uid, args]` for each process in the container.
+
+    `docker top` runs whatever `ps` the daemon's host has. A busybox one --
+    OrbStack's, for one -- refuses `-o uid` and only has `user`, which prints
+    the uid when the host has no name for it and `root` for 0. So `uid` is
+    asked first and `user` second, with `root` read back as 0.
+    """
+    status, stdout = runner(["docker", "top", container, "-o", "pid,uid,args"], {})
+    if status != 0:
+        stdout = run(runner, ["docker", "top", container, "-o", "pid,user,args"], what=f"top of {container}")
+    rows = [row.split(None, 2) for row in stdout.splitlines()[1:] if row.strip()]
+    return [[row[0], "0" if row[1] == "root" else row[1], *row[2:]] for row in rows if len(row) >= 2]
 
 
 def _listening_ports(runner: Runner, container: str) -> list[str]:

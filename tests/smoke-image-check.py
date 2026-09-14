@@ -96,8 +96,10 @@ class FakeDocker:
     def __init__(self, *, config: dict | None = None, real: bool = False, skip: str | None = None,
                  processes: tuple[tuple[str, str], ...] = ((INIT_PID, "10000"),),
                  tcp: str = TCP_TALKING, cat_status: int = 0, kill_status: int = 0,
-                 ignores_term: bool = False, exits: int = 0, exited_early: bool = False) -> None:
+                 ignores_term: bool = False, exits: int = 0, exited_early: bool = False, busybox: bool = False) -> None:
         self.argvs: list[list[str]] = []
+        # A daemon whose `ps` has no `uid` column, only `user` (OrbStack's).
+        self.busybox = busybox
         self.config = COMPLIANT if config is None else config
         self.real, self.skip, self.processes = real, skip, processes
         self.tcp, self.cat_status, self.kill_status = tcp, cat_status, kill_status
@@ -156,7 +158,11 @@ class FakeDocker:
             self._start()
             return 0, ""
         if argv[1] == "top":
-            return 0, "PID    UID    COMMAND\n" + "".join(f"{pid}   {uid}   python3 agent.py\n" for pid, uid in self.processes)
+            if self.busybox and argv[4] == "pid,uid,args":
+                return 1, ""
+            column = "USER" if self.busybox else "UID"
+            return 0, f"PID    {column}    COMMAND\n" + "".join(
+                f"{pid}   {'root' if self.busybox and uid == '0' else uid}   python3 agent.py\n" for pid, uid in self.processes)
         if argv[1] == "exec":
             return (self.cat_status, "") if self.cat_status not in (0, 1) else (self.cat_status, self.tcp)
         if argv[1] == "inspect":
@@ -236,6 +242,8 @@ def main() -> int:
         ("an EXPOSE nothing listens on", FakeDocker(config={"Cmd": ["x"], "ExposedPorts": {"8080/tcp": {}}})),
         ("a root PID 1 whose agent is uid 10000", FakeDocker(processes=((INIT_PID, "0"), ("4300", "10000")))),
         ("a kernel with no tcp6, so cat exits 1", FakeDocker(cat_status=1)),
+        ("a busybox ps, root PID 1 and a uid-10000 agent",
+         FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "10000")))),
     ):
         passed, failed = run_check(docker)
         check_that(f"check passes on {label}", failed and f"{failed.assertion}: {failed.saw}", None)
@@ -247,6 +255,8 @@ def main() -> int:
         ("the wrong token", FakeDocker(skip="token"), "the agent presents the token from the credentials file"),
         ("no WebSocket", FakeDocker(skip="websocket"), "the agent opens the chat WebSocket"),
         ("running as root", FakeDocker(processes=((INIT_PID, "0"),)), "every process but PID 1 runs as uid 10000"),
+        ("a busybox ps showing a root agent",
+         FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "0"))), "every process but PID 1 runs as uid 10000"),
         ("a root agent with a uid-10000 child",
          FakeDocker(processes=((INIT_PID, "0"), ("4300", "0"), ("4301", "10000"))), "every process but PID 1 runs as uid 10000"),
         ("an undeclared listener", FakeDocker(tcp=TCP_LISTENING), "the agent listens on no port"),
