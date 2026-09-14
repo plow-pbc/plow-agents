@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 from collections.abc import Callable
 
 from .api import die, log
@@ -31,13 +30,3 @@ def run(runner: Runner, argv: list[str], *, env: dict[str, str] | None = None, w
     if status != 0:
         die(f"{what} failed: `{' '.join(argv)}` exited {status}")
     return stdout
-
-
-def anonymous_env() -> dict[str, str]:
-    """A docker config with no credentials in it, so a pull is really anonymous.
-
-    Plow pulls these images with no login at all. Reading the digest back
-    through the pushing account's own keychain would confirm the image exists
-    for *you* and say nothing about whether Plow can boot it.
-    """
-    return {"DOCKER_CONFIG": tempfile.mkdtemp(prefix="plow-agents-anon-")}

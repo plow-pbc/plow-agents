@@ -330,7 +330,9 @@ def init(
     for path in written:
         log(f"  {os.path.relpath(path, destination)}")
     log(f"\nWrote {len(written)} files into {destination}.")
-    log("Set `slug` and `image` in plow-agents.toml, then `plow-agents image build`.")
+    missing = [f"`{field}`" for field, value in (("slug", slug), ("image", image)) if not value]
+    log(f"Set {' and '.join(missing)} in plow-agents.toml, then `plow-agents image build`." if missing
+        else "Next: `plow-agents image build`.")
 
 
 @image_app.command("build")

@@ -20,10 +20,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
+import httpx
+
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, SRC)
 
-from plow_agents import cli, config  # noqa: E402
+from plow_agents import api, cli, config  # noqa: E402
 
 IMAGE = "ghcr.io/plow-pbc/reference"
 SHA = "sha256:" + "ab" * 32
@@ -75,6 +77,34 @@ class Stub(BaseHTTPRequestHandler):
         pass
 
 
+class Registry:
+    """ghcr's anonymous pull, as a MockTransport: a 401 challenge, a token endpoint, the manifest.
+
+    `public=False` is a new ghcr package: the token endpoint refuses anyone
+    without credentials. `manifest_status` overrides what the manifest answers
+    to the anonymous token -- a registry that issues it and then refuses it.
+    """
+
+    def __init__(self, *, public: bool = True, manifest_status: int = 200, media: str = "application/vnd.oci.image.manifest.v1+json") -> None:
+        self.public, self.manifest_status, self.media = public, manifest_status, media
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.url.path == "/token":
+            if not self.public:
+                return httpx.Response(403, json={"errors": [{"code": "DENIED"}]})
+            return httpx.Response(200, json={"token": "anonymous"})
+        if request.url.path == f"/v2/plow-pbc/reference/manifests/{SHA}" or request.url.path.startswith("/v2/plow-pbc/reference/manifests/"):
+            if request.headers.get("Authorization") != "Bearer anonymous":
+                return httpx.Response(401, headers={"WWW-Authenticate":
+                    'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:plow-pbc/reference:pull"'})
+            if self.manifest_status != 200:
+                return httpx.Response(self.manifest_status)
+            return httpx.Response(200, headers={"Content-Type": self.media}, content=b"{}")
+        return httpx.Response(404)
+
+
 class FakeDocker:
     """Every docker argv the CLI runs, and what it is told back."""
 
@@ -86,8 +116,8 @@ class FakeDocker:
         self.calls.append((argv, env))
         if self.fail is not None and self.fail in argv:
             return 1, ""
-        if argv[1:3] == ["manifest", "inspect"]:
-            return 0, json.dumps({"Ref": argv[-1], "Descriptor": {"digest": self.digest}})
+        if argv[1] == "push":
+            return 0, f"abc123: Pushed\nlatest: digest: {self.digest} size: 528\n"
         return 0, ""
 
     @property
@@ -95,14 +125,17 @@ class FakeDocker:
         return [argv for argv, _ in self.calls]
 
 
-def run(*argv: str, cwd: str, base: str, token: str, docker: FakeDocker | None = None) -> tuple[int, str, str]:
-    """Drive the real Typer app in-process, with the docker seam replaced."""
+def run(*argv: str, cwd: str, base: str, token: str, docker: FakeDocker | None = None,
+        registry: Registry | None = None) -> tuple[int, str, str]:
+    """Drive the real Typer app in-process, with the docker seam replaced, and the registry when given."""
     out, err = io.StringIO(), io.StringIO()
     full = ["plow-agents", "--api-base", base, "--token-file", token, *argv]
     original = os.getcwd()
     os.chdir(cwd)
     try:
-        with patch.object(sys, "argv", full), patch.object(cli, "subprocess_runner", docker or FakeDocker()):
+        transport = httpx.MockTransport(registry) if registry is not None else api.TRANSPORT
+        with patch.object(sys, "argv", full), patch.object(cli, "subprocess_runner", docker or FakeDocker()), \
+                patch.object(api, "TRANSPORT", transport):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
                     cli.app()
@@ -150,6 +183,13 @@ def main() -> int:
         code, _, err = run("image", "push", cwd=missing, base=base, token=token)
         check("a verb with no toml names the field it wanted", (code != 0, "no image in" in err), (True, True))
 
+        # --- init ---------------------------------------------------------
+        code, _, err = run("init", "--slug", "a", "--image", "ghcr.io/a/b", os.path.join(work, "both"),
+                           cwd=work, base=base, token=token)
+        check("init with both fields given asks for nothing more", (code, "Set " in err), (0, False))
+        code, _, err = run("init", "--slug", "a", os.path.join(work, "one"), cwd=work, base=base, token=token)
+        check("init names only the field it was not given", (code, "Set `image` in plow-agents.toml" in err), (0, True))
+
         # --- image build ----------------------------------------------------
         docker = FakeDocker()
         code, _, _ = run("image", "build", cwd=work, base=base, token=token, docker=docker)
@@ -162,26 +202,39 @@ def main() -> int:
         check("a failed build is fatal", (code != 0, "build failed" in err), (True, True))
 
         # --- image push -----------------------------------------------------
-        docker = FakeDocker()
-        code, out, _ = run("image", "push", cwd=work, base=base, token=token, docker=docker)
+        docker, registry = FakeDocker(), Registry()
+        code, out, _ = run("image", "push", cwd=work, base=base, token=token, docker=docker, registry=registry)
         check("push exits 0", code, 0)
-        check("push pushes the tag", docker.argvs[0], ["docker", "push", f"{IMAGE}:latest"])
-        check("push reads the digest back with manifest inspect", docker.argvs[1],
-              ["docker", "manifest", "inspect", "--verbose", f"{IMAGE}:latest"])
-        check("push verifies the pull anonymously, with an empty docker config",
-              bool(docker.calls[1][1].get("DOCKER_CONFIG")) and not os.listdir(docker.calls[1][1]["DOCKER_CONFIG"]), True)
+        check("push pushes the tag, and runs no other docker command", docker.argvs, [["docker", "push", f"{IMAGE}:latest"]])
+        check("push asks the registry for the pushed digest, is challenged, takes the anonymous token, and asks again",
+              [(request.method, request.url.path) for request in registry.requests],
+              [("GET", f"/v2/plow-pbc/reference/manifests/{SHA}"), ("GET", "/token"), ("GET", f"/v2/plow-pbc/reference/manifests/{SHA}")])
+        check("and the token request carries the challenge's scope and no credentials",
+              (dict(registry.requests[1].url.params), "Authorization" in registry.requests[1].headers),
+              ({"service": "ghcr.io", "scope": "repository:plow-pbc/reference:pull"}, False))
         check("push prints the digest-pinned reference", out.strip(), f"{IMAGE}@{SHA}")
         check("push records last_pushed in the toml", config.load(work).last_pushed, SHA)
         with open(toml) as handle:
             check("and leaves the other keys alone", 'slug = "reference"' in handle.read(), True)
 
+        other = "sha256:" + "ef" * 32
+        for label, registry, words in (
+            ("a private package (the token endpoint refuses)", Registry(public=False), "is not public"),
+            ("a manifest refused to the anonymous token", Registry(manifest_status=403), "is not public"),
+            ("a manifest the registry cannot find", Registry(manifest_status=404), "HTTP 404"),
+            ("a multi-architecture index", Registry(media="application/vnd.oci.image.index.v1+json"), "multi-architecture"),
+        ):
+            code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=FakeDocker(digest=other), registry=registry)
+            check(f"push fails on {label}, saying so", (code != 0, words in err), (True, True))
+            check(f"and {label} leaves last_pushed as it was", config.load(work).last_pushed, SHA)
+
         docker = FakeDocker(digest="not-a-digest")
-        code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=docker)
-        check("a registry answer with no sha256 digest is fatal", (code != 0, "no sha256 digest" in err), (True, True))
+        code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=docker, registry=Registry())
+        check("a push that prints no sha256 digest is fatal", (code != 0, "no sha256 digest" in err), (True, True))
         check("and last_pushed is left as it was", config.load(work).last_pushed, SHA)
 
         second = "sha256:" + "cd" * 32
-        run("image", "push", cwd=work, base=base, token=token, docker=FakeDocker(digest=second))
+        run("image", "push", cwd=work, base=base, token=token, docker=FakeDocker(digest=second), registry=Registry())
         check("a second push replaces last_pushed rather than appending", config.load(work).last_pushed, second)
         with open(toml) as handle:
             check("leaving exactly one last_pushed line", handle.read().count("last_pushed"), 1)
