@@ -11,7 +11,8 @@ a real phone line. This repo is the image.
   ```
   It is not on PyPI. That puts `plow-agents` on your `PATH`.
 - **Docker**, for building and checking the image.
-- **A public registry you can push to** — ghcr.io under this repo is the default.
+- **A public registry you can push to** — ghcr.io under this repo is the default. A Docker Hub
+  image is written with its host: `docker.io/you/my-agent`.
 
 You do not need `gh` or a Python of your own.
 
@@ -38,7 +39,7 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 ```
 
 Call a model, read a database, do nothing at all — the contract does not care,
-as long as the four things above `compose_reply` keep happening.
+as long as the code above `compose_reply` keeps talking to Plow.
 
 ## Step 3 — Build and check it
 
@@ -47,10 +48,10 @@ plow-agents image build
 plow-agents image check
 ```
 
-`image check` runs the image the way exe.dev will: as uid 10000, with the CMD
-as PID 1, with a credentials file dropped in as root, against a stub Plow on
-this machine. It asserts the contract in order and names the first thing that
-fails. Passing it is what makes a deploy worth trying.
+`image check` runs the image the way exe.dev will: the CMD as PID 1, a
+credentials file dropped in as root, a stub Plow on this machine. It fails only
+on [the contract](#the-contract) and prints everything under **Sharp edges** as
+warnings. Passing it is what makes a deploy worth trying.
 
 ## Step 4 — Publish and deploy
 
@@ -73,21 +74,27 @@ on a `v*` tag.
 - **The credentials file is root-owned `0600`, so PID 1 starts as root.** That
   is why the Dockerfile has no `USER` line: an image that declares `USER 10000`
   cannot read its own credential. `agent.py` reads it and then drops to uid
-  10000 before touching the network, and `image check` fails an image with any
-  process other than PID 1 running as anything but 10000.
+  10000 before touching the network, and `image check` warns about any process
+  other than PID 1 running as anything but 10000.
 - **Ask `/v1/agents/cloud/me` at boot, every boot.** An agent can be moved to
   another line without anything on the VM changing; that call is how you find
   out.
 - **No inbound ports.** Nothing dials in. The chat surface is an outbound
-  WebSocket, and `image check` fails an image with anything listening while
-  the agent is connected. It reads that from `/proc/net/tcp` with a `cat` inside
-  the container, so an image with no `cat` cannot pass it.
-- **Exit on SIGTERM.** `docker stop` is how the VM goes away. An image that
-  has to be killed fails the check.
+  WebSocket.
+- **Exit on SIGTERM.** `docker stop` is how the VM goes away. `image check`
+  warns about an image that has to be killed.
 - **Nothing is baked in.** No tenant, no token, no per-user state — that is
   what lets the image be public and lets Plow pull it with no credential.
 
 ## The contract
 
-The full statement of what an image must do is in
-[api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md).
+Three lines, and the only things that fail `image check`:
+
+- Your image's `CMD` is PID 1.
+- Plow writes one file, `/var/lib/plow/credentials`, with `PLOW_API_BASE` (no `/v1`) and
+  `PLOW_AGENT_TOKEN` — plus `AGENT_ID`, the listing slug, only when the agent was deployed from a
+  listing. Don't require it.
+- Your agent uses them to talk to the Plow API.
+
+The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything under
+**Sharp edges** is advice.

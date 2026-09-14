@@ -18,6 +18,8 @@ answers are scripted too.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import signal
@@ -38,11 +40,7 @@ TEMPLATE = os.path.join(SRC, "plow_agents", "template")
 CONTAINER = "c0ffee"
 INIT_PID = "4242"
 COMPLIANT = {"Cmd": ["python3", "/opt/agent/agent.py"]}
-TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-# One outbound connection, ESTABLISHED (01): an agent talking to Plow.
-TCP_TALKING = TCP_HEADER + "   0: 0200A8C0:D431 0100007F:1F90 01 00000000:00000000 00:00000000 00000000 10000 0 1 1 0\n"
-# ...and a listener on 0.0.0.0:8080 (0A).
-TCP_LISTENING = TCP_TALKING + "   1: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000 10000 0 2 1 0\n"
+CONTRACT = ["the image has a CMD to run as PID 1", check.TOKEN_ASSERTION]
 
 # Stands in for the kernel on the three calls a non-root test process cannot
 # make, and prints each so the order of the drop can be read back.
@@ -71,11 +69,12 @@ def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
 
 
 def fake_agent(base: str, token: str, *, skip: str | None, stopping: threading.Event) -> None:
-    """An agent with one step of the contract removable, to fail the check on purpose."""
+    """A compliant agent with one step removable: the contract's to fail the check, the advice's to warn."""
     try:
-        if skip == "identity":
+        if skip == "anything":
             return
-        call("GET", f"{base}/v1/agents/cloud/me", "wrong-token" if skip == "token" else token)
+        if skip != "me":
+            call("GET", f"{base}/v1/agents/cloud/me", "wrong-token" if skip == "token" else token)
         if skip in ("token", "websocket"):
             return
         ticket = call("POST", f"{base}/v1/ws/ticket", token, {})["ticket"]
@@ -95,14 +94,14 @@ class FakeDocker:
 
     def __init__(self, *, config: dict | None = None, real: bool = False, skip: str | None = None,
                  processes: tuple[tuple[str, str], ...] = ((INIT_PID, "10000"),),
-                 tcp: str = TCP_TALKING, cat_status: int = 0, kill_status: int = 0,
+                 kill_status: int = 0,
                  ignores_term: bool = False, exits: int = 0, exited_early: bool = False, busybox: bool = False) -> None:
         self.argvs: list[list[str]] = []
         # A daemon whose `ps` has no `uid` column, only `user` (OrbStack's).
         self.busybox = busybox
         self.config = COMPLIANT if config is None else config
         self.real, self.skip, self.processes = real, skip, processes
-        self.tcp, self.cat_status, self.kill_status = tcp, cat_status, kill_status
+        self.kill_status = kill_status
         self.ignores_term, self.exits, self.exited_early = ignores_term, exits, exited_early
         self.stopping = threading.Event()
         self.work = tempfile.mkdtemp(prefix="image-check-")
@@ -163,8 +162,6 @@ class FakeDocker:
             column = "USER" if self.busybox else "UID"
             return 0, f"PID    {column}    COMMAND\n" + "".join(
                 f"{pid}   {'root' if self.busybox and uid == '0' else uid}   python3 agent.py\n" for pid, uid in self.processes)
-        if argv[1] == "exec":
-            return (self.cat_status, "") if self.cat_status not in (0, 1) else (self.cat_status, self.tcp)
         if argv[1] == "inspect":
             return 0, (INIT_PID if argv[3] == "{{.State.Pid}}" else self._state()) + "\n"
         if argv[1] == "kill":
@@ -193,37 +190,32 @@ def main() -> int:
             failures.append(f"{what}\n  want: {want!r}\n  got:  {got!r}")
         print(f"{'ok  ' if got == want else 'FAIL'} {what}")
 
-    def run_check(docker: FakeDocker) -> tuple[list[str] | None, check.ContractError | None]:
+    def run_check(docker: FakeDocker) -> tuple[list[str] | None, list[str] | None, check.ContractError | None, str]:
+        """(passed, warned, failure, what it printed)."""
+        output = io.StringIO()
         try:
-            return check.check(docker, image="ghcr.io/you/agent:latest", agent_id="demo", timeout=10, stop_timeout=3), None
+            with contextlib.redirect_stderr(output):
+                passed, warned = check.check(docker, image="ghcr.io/you/agent:latest", timeout=10, advice_wait=3, stop_timeout=3)
+            return passed, warned, None, output.getvalue()
         except check.ContractError as failure:
-            return None, failure
+            return None, None, failure, output.getvalue()
 
-    # --- the reference agent passes every assertion --------------------------
+    # --- the reference agent passes, with no warnings ------------------------
     docker = FakeDocker(real=True)
-    passed, failed = run_check(docker)
+    passed, warned, failed, output = run_check(docker)
     check_that("check passes on the real template agent.py", failed and f"{failed.assertion}: {failed.saw}", None)
     if failed:
         print(docker.agent_log())
-    check_that("and names every assertion it made", passed, [
-        "the image has a CMD to run as PID 1",
-        "the agent calls GET /v1/agents/cloud/me with its token",
-        "the agent presents the token from the credentials file",
-        "the agent opens the chat WebSocket",
-        "every process but PID 1 runs as uid 10000",
-        "the agent listens on no port",
-        "the agent replies to one message",
-        "the agent exits cleanly on SIGTERM",
-    ])
+    check_that("and makes exactly the contract's two assertions", passed, CONTRACT)
+    check_that("with no warning", (warned, "warn" in output), ([], False))
     agent_log = docker.agent_log()
     check_that("the agent drops groups, then gid, then uid, before it says anything",
                [line for line in agent_log.splitlines() if line.startswith(("seam:", "INFO starting"))][:4],
-               ["seam: setgroups []", "seam: setgid 10000", "seam: setuid 10000", "INFO starting as demo, uid 10000"])
+               ["seam: setgroups []", "seam: setgid 10000", "seam: setuid 10000", "INFO starting as uid 10000"])
     check_that("it reads the stub's schema-shaped frame and answers that chat", "INFO replied in cht_check" in agent_log, True)
     check_that("and the SIGTERM really ended its process, with 0", docker.process and docker.process.returncode, 0)
-    check_that("the credential is written as the contract's three lines",
-               sorted(line.split("=")[0] for line in docker.credentials.splitlines()),
-               ["AGENT_ID", "PLOW_AGENT_TOKEN", "PLOW_API_BASE"])
+    check_that("the credential is a direct deploy's: no AGENT_ID, which the agent must not need",
+               sorted(line.split("=")[0] for line in docker.credentials.splitlines()), ["PLOW_AGENT_TOKEN", "PLOW_API_BASE"])
     check_that("and mode 600, as Plow writes it", oct(docker.credential_mode), "0o600")
     check_that("and names the container by the host it can reach this machine on",
                "PLOW_API_BASE=http://host.docker.internal:" in docker.credentials, True)
@@ -237,44 +229,37 @@ def main() -> int:
                ([["docker", "kill", "--signal", "TERM", CONTAINER]], False))
     check_that("and torn down whatever happened", ["docker", "rm", "--force", CONTAINER] in docker.argvs, True)
 
-    # --- what the contract allows -------------------------------------------
-    for label, docker in (
-        ("an EXPOSE nothing listens on", FakeDocker(config={"Cmd": ["x"], "ExposedPorts": {"8080/tcp": {}}})),
-        ("a root PID 1 whose agent is uid 10000", FakeDocker(processes=((INIT_PID, "0"), ("4300", "10000")))),
-        ("a kernel with no tcp6, so cat exits 1", FakeDocker(cat_status=1)),
-        ("a busybox ps, root PID 1 and a uid-10000 agent",
-         FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "10000")))),
+    # --- only the contract fails the check ----------------------------------
+    for label, docker, assertion, saw in (
+        ("no CMD", FakeDocker(config={"Cmd": []}), CONTRACT[0], "neither Cmd nor Entrypoint is set"),
+        ("an agent that calls nothing", FakeDocker(skip="anything"), CONTRACT[1], "no request reached the API"),
+        ("the wrong token", FakeDocker(skip="token"), CONTRACT[1], "requests arrived without it"),
     ):
-        passed, failed = run_check(docker)
-        check_that(f"check passes on {label}", failed and f"{failed.assertion}: {failed.saw}", None)
-
-    # --- each way to be non-compliant, named at the first failing assertion ---
-    for label, docker, assertion in (
-        ("no CMD", FakeDocker(config={"Cmd": []}), "the image has a CMD to run as PID 1"),
-        ("no identity call", FakeDocker(skip="identity"), "the agent calls GET /v1/agents/cloud/me with its token"),
-        ("the wrong token", FakeDocker(skip="token"), "the agent presents the token from the credentials file"),
-        ("no WebSocket", FakeDocker(skip="websocket"), "the agent opens the chat WebSocket"),
-        ("running as root", FakeDocker(processes=((INIT_PID, "0"),)), "every process but PID 1 runs as uid 10000"),
-        ("a busybox ps showing a root agent",
-         FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "0"))), "every process but PID 1 runs as uid 10000"),
-        ("a root agent with a uid-10000 child",
-         FakeDocker(processes=((INIT_PID, "0"), ("4300", "0"), ("4301", "10000"))), "every process but PID 1 runs as uid 10000"),
-        ("an undeclared listener", FakeDocker(tcp=TCP_LISTENING), "the agent listens on no port"),
-        ("an image with no cat", FakeDocker(cat_status=127), "the agent listens on no port"),
-        ("no reply", FakeDocker(skip="reply"), "the agent replies to one message"),
-        ("an agent that ignores SIGTERM", FakeDocker(ignores_term=True), "the agent exits cleanly on SIGTERM"),
-        ("a nonzero exit on SIGTERM", FakeDocker(exits=137), "the agent exits cleanly on SIGTERM"),
-        ("a container already gone", FakeDocker(exited_early=True), "the agent exits cleanly on SIGTERM"),
-        ("a failed docker kill", FakeDocker(kill_status=1), "the agent exits cleanly on SIGTERM"),
-    ):
-        passed, failed = run_check(docker)
+        passed, warned, failed, _ = run_check(docker)
         check_that(f"check fails on {label}, naming that assertion", failed and failed.assertion, assertion)
-        check_that(f"and {label} says what it saw instead", bool(failed and failed.saw), True)
-        check_that(f"and {label} stops there, reporting nothing after it", assertion not in (passed or []), True)
-    check_that("an unverifiable port table says so rather than passing",
-               "could not verify" in (run_check(FakeDocker(cat_status=127))[1].saw), True)
-    check_that("and a listener is named by its port",
-               run_check(FakeDocker(tcp=TCP_LISTENING))[1].saw, "listening on tcp port 8080")
+        check_that(f"and {label} says what it saw instead", saw in (failed.saw if failed else ""), True)
+
+    # --- the advice warns, and never fails ----------------------------------
+    identity, websocket, reply = "it calls GET /v1/agents/cloud/me on boot", "it opens the chat WebSocket", "it replies to a message"
+    uid, sigterm = "every process but PID 1 runs as uid 10000", "it exits cleanly on SIGTERM"
+    for label, docker, warnings in (
+        ("a root PID 1 whose agent is uid 10000", FakeDocker(processes=((INIT_PID, "0"), ("4300", "10000"))), []),
+        ("a busybox ps, root PID 1 and a uid-10000 agent", FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "10000"))), []),
+        ("no identity call", FakeDocker(skip="me"), [identity]),
+        ("no WebSocket", FakeDocker(skip="websocket"), [websocket, reply]),
+        ("no reply", FakeDocker(skip="reply"), [reply]),
+        ("running as root", FakeDocker(processes=((INIT_PID, "0"),)), [uid]),
+        ("a busybox ps showing a root agent", FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "0"))), [uid]),
+        ("a root agent with a uid-10000 child", FakeDocker(processes=((INIT_PID, "0"), ("4300", "0"), ("4301", "10000"))), [uid]),
+        ("an agent that ignores SIGTERM", FakeDocker(ignores_term=True), [sigterm]),
+        ("a nonzero exit on SIGTERM", FakeDocker(exits=137), [sigterm]),
+        ("a container already gone", FakeDocker(exited_early=True), [sigterm]),
+        ("a failed docker kill", FakeDocker(kill_status=1), [sigterm]),
+    ):
+        passed, warned, failed, output = run_check(docker)
+        check_that(f"{label} passes the contract", (failed and failed.assertion, passed), (None, CONTRACT))
+        check_that(f"and {label} warns about exactly that", warned, warnings)
+        check_that("and prints it as a warn line", all(f"warn {advice}" in output for advice in warnings), True)
 
     # --- the reference agent stops when told, and gives up on an answer -----
     with Plow("hang") as plow:

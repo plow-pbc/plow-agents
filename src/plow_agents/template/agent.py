@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A Plow cloud agent, whole, in one file.
 
-It does the four things the contract asks of an image and nothing else:
+It keeps the contract and follows its advice, and does nothing else:
 
   1. reads /var/lib/plow/credentials as root, then drops to uid 10000;
   2. calls GET {PLOW_API_BASE}/v1/agents/cloud/me for its line and its chats;
@@ -57,7 +57,7 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 
 
 def read_credentials(path: str = CREDENTIALS) -> dict[str, str]:
-    """The file Plow writes: root-owned 0600, three KEY=value lines.
+    """The file Plow writes: root-owned 0600, KEY=value lines.
 
     Read as data. Plow owns the path and the permissions; what the agent does
     with the values afterwards is the agent's business.
@@ -69,7 +69,8 @@ def read_credentials(path: str = CREDENTIALS) -> dict[str, str]:
             if line and not line.startswith("#") and "=" in line:
                 key, _, value = line.partition("=")
                 values[key.strip()] = value.strip()
-    missing = [key for key in ("AGENT_ID", "PLOW_API_BASE", "PLOW_AGENT_TOKEN") if not values.get(key)]
+    # AGENT_ID is written only for a listing deploy, so it is never required.
+    missing = [key for key in ("PLOW_API_BASE", "PLOW_AGENT_TOKEN") if not values.get(key)]
     if missing:
         raise SystemExit(f"{path} is missing {', '.join(missing)}")
     return values
@@ -243,9 +244,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     credentials = read_credentials()
     become_agent()
-    log.info("starting as %s, uid %d", credentials["AGENT_ID"], os.getuid())
+    listing = credentials.get("AGENT_ID")
+    log.info("starting as uid %d%s", os.getuid(), f", listing {listing}" if listing else "")
     # SIGTERM is how the VM is stopped. Exiting on it is the whole of the
-    # shutdown contract; a container killed after the grace period fails the check.
+    # shutdown advice; `image check` warns about a container killed after the grace period.
     asyncio.run(run(credentials))
 
 

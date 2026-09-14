@@ -6,6 +6,21 @@ your own machine and Plow only hands it a credential.
 
 Do the steps yourself, or hand this page to an AI coding agent and let it do most of the work.
 
+## The contract
+
+A cloud image has three obligations:
+
+- Your image's `CMD` is PID 1.
+- Plow writes one file, `/var/lib/plow/credentials`, with `PLOW_API_BASE` (no `/v1`) and
+  `PLOW_AGENT_TOKEN` — plus `AGENT_ID`, the listing slug, only when the agent was deployed from a
+  listing. Don't require it.
+- Your agent uses them to talk to the Plow API.
+
+That is the whole of it. The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything else on this
+page — read the file as root and drop to a non-root user, listen on no port, ask
+`GET /v1/agents/cloud/me` on every boot, exit on SIGTERM — is advice. `image check` warns about it
+and never fails on it.
+
 ## What you need
 
 - **[uv](https://docs.astral.sh/uv/)** — installs and runs the CLI.
@@ -15,7 +30,9 @@ Do the steps yourself, or hand this page to an AI coding agent and let it do mos
 - **Docker** — only for the three verbs that build, check and push an image. `login`, `lines`,
   `mint` and `deploy` never touch it.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
-  anonymously, so the image must be public.
+  anonymously, so the image must be public. Write a Docker Hub image with its host,
+  `docker.io/you/my-agent`: Plow reads the registry from the reference, and a bare `you/my-agent`
+  names none.
 
 You do not need `gh`, a GitHub CLI login, or a Python of your own.
 
@@ -99,11 +116,10 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
     """What to say back, or None to stay quiet. This is the part you replace."""
 ```
 
-Everything above it is the contract in
-[api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md):
-read `/var/lib/plow/credentials`, drop to uid 10000, call
-`GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot, open the chat WebSocket, answer, and exit
-on SIGTERM. Any image that does those things works — the reference agent is one, not the one.
+Everything above it keeps [the contract](#the-contract) and follows the advice: read
+`/var/lib/plow/credentials` as root, drop to uid 10000, call `GET {PLOW_API_BASE}/v1/agents/cloud/me`
+on every boot, open the chat WebSocket, answer, and exit on SIGTERM. Any image that keeps the
+contract works — the reference agent is one, not the one.
 
 ## Step 4 — Build the image
 
@@ -123,29 +139,32 @@ plow-agents image check
 
 This is the step that saves a failed deploy. It runs your built image the way exe.dev will —
 no command override, a credentials file copied in as root at mode 0600, a stub Plow on this
-machine — and asserts, in order:
+machine. Two things fail it, and they are the contract's:
 
 ```
   ok   the image has a CMD to run as PID 1
-  ok   the agent calls GET /v1/agents/cloud/me with its token
-  ok   the agent presents the token from the credentials file
-  ok   the agent opens the chat WebSocket
-  ok   every process but PID 1 runs as uid 10000
-  ok   the agent listens on no port
-  ok   the agent replies to one message
-  ok   the agent exits cleanly on SIGTERM
+  ok   something inside calls the Plow API with the token from the credentials file
 ```
 
-It stops at the first failure and names it, because a container that never read its credential
-has nothing to say about whether it would have answered a message:
+Then the advice, each line `ok` or `warn`. A warning never fails the check:
+
+```
+  ok   it calls GET /v1/agents/cloud/me on boot
+  ok   it opens the chat WebSocket
+  ok   it replies to a message
+  ok   every process but PID 1 runs as uid 10000
+  ok   it exits cleanly on SIGTERM
+```
+
+A failure names the assertion and what was seen instead:
 
 ```
 plow-agents: ghcr.io/you/my-agent:latest does not satisfy the contract.
-  FAILED: every process but PID 1 runs as uid 10000
-  saw:    no process runs as uid 10000 -- the only one is PID 1, as uid 0
+  FAILED: something inside calls the Plow API with the token from the credentials file
+  saw:    no request reached the API
 ```
 
-**Checkpoint:** every assertion passes.
+**Checkpoint:** both assertions pass. Read the warnings, and fix the ones you did not mean.
 
 ## Step 6 — Log in to the registry
 
@@ -204,8 +223,8 @@ image = "ghcr.io/you/my-agent"
 last_pushed = "sha256:3f0e...c19a"
 ```
 
-The tag is only a handle for the push. The digest is the reference — it is the only thing Plow
-accepts, and the only thing that says which bytes booted.
+The tag is only a handle for the push. The digest is the reference: Plow deploys a digest-pinned
+image or a listing slug, nothing else, and the digest is the only thing that says which bytes booted.
 
 **Checkpoint:** `last_pushed` is in `plow-agents.toml`, and a pull with no login answers `200`:
 
@@ -314,18 +333,18 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 - **`image check` serves a stub Plow on every interface** for the length of the run, because the
   container has to reach it. Its token is random per run and dies with the check, but on a shared
   network that port is briefly open.
-- **`image check` cannot see inside your image.** It asserts what is observable from outside: the
-  declared CMD and ports, which uid the processes run as, what the agent said to Plow, and how it
-  exited. An image that passes still has to be right.
+- **`image check` cannot see inside your image.** It checks what is observable from outside: the
+  declared CMD, which uid the processes run as, what the agent said to Plow, and how it exited. An image that passes still has to be right.
 - **PID 1 starts as root, and that is correct.** Plow writes the credential root-owned `0600`, so
   an image with `USER 10000` cannot read its own credential. Read it as root and drop privileges
   — the reference agent does it in one function.
-- **A tag is never a reference.** Plow refuses anything but `name@sha256:…`. `deploy latest` is an
-  error, not a convenience.
-- **The image must be public.** `image push` reads the digest back through an empty Docker config
-  on purpose. If that step fails, the push worked for *you* and Plow still cannot pull it.
-- **Multi-arch builds have no single digest to pin.** `image build` builds `linux/amd64` alone for
-  that reason; if you build an index some other way, `image push` will say so.
+- **A tag is never a reference.** Plow takes a digest-pinned `name@sha256:…` or a listing slug, and
+  refuses anything else. `deploy latest` is an error, not a convenience.
+- **The image must be public.** `image push` fetches the pushed digest's manifest with no
+  credentials at all. If that step fails, the push worked for *you* and Plow still cannot pull it.
+- **The CLI pins single-platform images only.** A multi-arch index has a digest of its own, but
+  `image build` builds `linux/amd64` alone and `image push` refuses an index, so the digest you
+  deploy names exactly the bytes exe.dev runs.
 - **One line, one agent.** `mint` and `deploy` both refuse a line that already answers. Retire the
   agent holding it first — that is a decision, so there is no flag for it.
 - **There is no upgrade in place yet.** `deploy` creates an agent; it does not repoint one. A new
@@ -350,7 +369,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `profile [--name] [--photo] [--show]` | Set or show your public profile. |
 | `init [--slug] [--image] [DIR]` | Start an agent repo: reference agent, Dockerfile, Action, toml. |
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
-| `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will, and assert the contract. |
+| `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will: fail on the contract, warn on the advice. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [DIGEST] [--line] [--image]` | Run a pushed digest on one of your lines. |
 | `agents` | What is deployed on this account: line, slug, status, image digest. |

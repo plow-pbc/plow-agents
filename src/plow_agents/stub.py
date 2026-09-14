@@ -48,6 +48,8 @@ class Recorder:
         self.bad_auth: list[str] = []
         self.reply: str | None = None
         self.replied = threading.Event()
+        # Set by any request, to any path, carrying this run's token.
+        self.token = threading.Event()
         self._lock = threading.Lock()
 
     def saw(self, event: str) -> None:
@@ -99,6 +101,10 @@ class _Handler(BaseHTTPRequestHandler):
     def stub(self) -> Stub:
         return self.server.stub  # type: ignore[attr-defined]
 
+    def _note_token(self) -> None:
+        if self.headers.get("Authorization") == f"Bearer {self.stub.token}":
+            self.stub.seen.token.set()
+
     def _authorized(self) -> bool:
         if self.headers.get("Authorization") == f"Bearer {self.stub.token}":
             return True
@@ -115,6 +121,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
+        self._note_token()
         if self.path.startswith("/v1/ws?") or self.path == "/v1/ws":
             return self._websocket()
         if self.path == "/v1/agents/cloud/me":
@@ -128,6 +135,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
+        self._note_token()
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         if self.path == "/v1/ws/ticket":
             self.stub.seen.saw("ticket")
@@ -206,9 +214,11 @@ class Stub:
         """The `PLOW_API_BASE` to write into the credential, from where it is read."""
         return f"http://{host}:{self.port}"
 
-    def credentials(self, host: str, agent_id: str) -> str:
-        """The three lines Plow writes, and nothing else."""
-        return f"AGENT_ID={agent_id}\nPLOW_API_BASE={self.base_for(host)}\nPLOW_AGENT_TOKEN={self.token}\n"
+    def credentials(self, host: str) -> str:
+        """The file Plow writes for a direct deploy. No `AGENT_ID`: that is only
+        written for a listing deploy, so an agent that needs it would fail on
+        every deploy that is not one, and this is where it should find out."""
+        return f"PLOW_API_BASE={self.base_for(host)}\nPLOW_AGENT_TOKEN={self.token}\n"
 
     def identity(self) -> dict:
         """`GET /v1/agents/cloud/me`: one line, one chat, no Mac, a signup phrase."""

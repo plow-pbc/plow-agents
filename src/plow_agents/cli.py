@@ -357,13 +357,13 @@ def image_check(
     tag: Annotated[str, typer.Option("--tag", help="the tag to check; the one `image build` wrote")] = images.DEFAULT_TAG,
     timeout: Annotated[float, typer.Option("--timeout", help="seconds to allow the agent to boot and answer")] = contract.BOOT_TIMEOUT_S,
 ) -> None:
-    """Run the built image the way exe.dev would, and assert the contract on it."""
+    """Run the built image the way exe.dev would: fail on the contract, warn on the advice."""
     this = state(ctx)
     settings = config.load(image=image)
     reference = f"{settings.need_image()}:{tag}"
     log(f"Checking {reference} against the cloud-agent contract.")
     try:
-        passed = contract.check(this.docker, image=reference, agent_id=settings.slug or "image-check", timeout=timeout)
+        passed, warned = contract.check(this.docker, image=reference, timeout=timeout)
     except contract.ContractError as failure:
         # The first failing assertion and nothing after it: a container that
         # never read its credential has nothing to say about whether it would
@@ -371,7 +371,8 @@ def image_check(
         log("")
         die(f"{reference} does not satisfy the contract.\n  FAILED: {failure.assertion}\n  saw:    {failure.saw}")
     log("")
-    print(f"{reference} satisfies the contract ({len(passed)} assertions).")
+    advice = f", with {len(warned)} warning{'s' if len(warned) != 1 else ''} above" if warned else ""
+    print(f"{reference} satisfies the contract ({len(passed)} assertions){advice}.")
 
 
 @image_app.command("push")
