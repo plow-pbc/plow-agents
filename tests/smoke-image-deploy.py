@@ -25,7 +25,7 @@ import httpx
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, SRC)
 
-from plow_agents import api, cli, config  # noqa: E402
+from plow_agents import api, cli, config, images  # noqa: E402
 
 IMAGE = "ghcr.io/plow-pbc/reference"
 SHA = "sha256:" + "ab" * 32
@@ -200,6 +200,13 @@ def main() -> int:
         docker = FakeDocker(fail="build")
         code, _, err = run("image", "build", cwd=work, base=base, token=token, docker=docker)
         check("a failed build is fatal", (code != 0, "build failed" in err), (True, True))
+
+        for written, want in (("ghcr.io/you/agent", ("ghcr.io", "you/agent")),
+                              ("docker.io/you/agent", ("registry-1.docker.io", "you/agent")),
+                              ("docker.io/python", ("registry-1.docker.io", "library/python")),
+                              ("you/agent", ("registry-1.docker.io", "you/agent")),
+                              ("localhost:5000/agent", ("localhost:5000", "agent"))):
+            check(f"{written} is pulled from {want[0]} as {want[1]}", images.registry_of(written), want)
 
         # --- image push -----------------------------------------------------
         docker, registry = FakeDocker(), Registry()
