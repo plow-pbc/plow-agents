@@ -330,7 +330,8 @@ def init(
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as handle:
         handle.write(f'slug = "{slug}"\nimage = "{image}"\n')
-    log(f"Wrote {path}. Set `slug` and `image` before `plow-agents image push`.")
+    missing = [f"`{field}`" for field, value in (("slug", slug), ("image", image)) if not value]
+    log(f"Wrote {path}." + (f" Set {' and '.join(missing)} before `plow-agents image push`." if missing else ""))
 
 
 @image_app.command("build")

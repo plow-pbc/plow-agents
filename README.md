@@ -155,13 +155,18 @@ last_pushed = "sha256:3f0e...c19a"
 The tag is only a handle for the push. The digest is the reference — it is the only thing Plow
 accepts, and the only thing that says which bytes booted.
 
-**Checkpoint:** `last_pushed` is in `plow-agents.toml`, and
+**Checkpoint:** `last_pushed` is in `plow-agents.toml`, and a pull with no login answers `200`:
 
 ```sh
-DOCKER_CONFIG=$(mktemp -d) docker manifest inspect ghcr.io/you/my-agent@sha256:3f0e...c19a
+TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:you/my-agent:pull" | jq -r .token)
+curl -sI -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+  https://ghcr.io/v2/you/my-agent/manifests/sha256:3f0e...c19a
 ```
 
-answers without asking you to log in. That is the whole test: it is the pull Plow does.
+That is the whole test: it is the pull Plow does. Not `DOCKER_CONFIG=$(mktemp -d) docker manifest
+inspect` -- on macOS docker falls back to the keychain when the config holds no credentials, so
+that pull is not anonymous.
 
 ## Step 6 — Deploy it on your own line
 
