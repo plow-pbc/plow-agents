@@ -65,20 +65,23 @@ pulls anonymously — then push again. The full walkthrough, including the
 registry login and the visibility switch, is in the
 [plow-agents README](https://github.com/plow-pbc/plow-agents#readme).
 
-`.github/workflows/publish.yml` does the same three commands on a `v*` tag.
+`.github/workflows/publish.yml` runs `image build`, `image check` and `image push`
+on a `v*` tag.
 
 ## Sharp edges
 
 - **The credentials file is root-owned `0600`, so PID 1 starts as root.** That
   is why the Dockerfile has no `USER` line: an image that declares `USER 10000`
   cannot read its own credential. `agent.py` reads it and then drops to uid
-  10000 before touching the network, and `image check` confirms the process
-  talking to Plow is 10000 and not root.
+  10000 before touching the network, and `image check` fails an image with any
+  process other than PID 1 running as anything but 10000.
 - **Ask `/v1/agents/cloud/me` at boot, every boot.** An agent can be moved to
   another line without anything on the VM changing; that call is how you find
   out.
 - **No inbound ports.** Nothing dials in. The chat surface is an outbound
-  WebSocket, and `image check` fails an image that declares an `EXPOSE`.
+  WebSocket, and `image check` fails an image with anything listening while
+  the agent is connected. It reads that from `/proc/net/tcp` with a `cat` inside
+  the container, so an image with no `cat` cannot pass it.
 - **Exit on SIGTERM.** `docker stop` is how the VM goes away. An image that
   has to be killed fails the check.
 - **Nothing is baked in.** No tenant, no token, no per-user state — that is

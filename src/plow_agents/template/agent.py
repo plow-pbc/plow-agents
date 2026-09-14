@@ -24,8 +24,11 @@ import logging
 import os
 import signal
 import sys
+import threading
 import urllib.error
 import urllib.request
+from collections.abc import Callable
+from functools import partial
 
 import websockets
 
@@ -36,6 +39,7 @@ AGENT_UID = AGENT_GID = 10000
 # starts without it is guessing which line it is on. Retry briefly, fail closed.
 IDENTITY_ATTEMPTS = 10
 IDENTITY_BACKOFF_S = 2
+RECONNECT_BACKOFF_S = 5
 
 log = logging.getLogger("agent")
 
@@ -98,7 +102,50 @@ def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
         return json.loads(response.read() or b"null")
 
 
-def identify(base: str, token: str) -> dict:
+async def request(method: str, url: str, token: str, body: dict | None = None) -> dict:
+    """`call`, awaited without holding up shutdown.
+
+    On a daemon thread rather than `asyncio.to_thread`: the executor behind
+    that is joined at exit, so a request in flight when SIGTERM arrives would
+    keep the process alive for up to its whole timeout. A daemon thread is
+    abandoned instead, and its result with it.
+    """
+    loop = asyncio.get_running_loop()
+    done = loop.create_future()
+
+    def settle(outcome: Callable[[], None]) -> None:
+        if not done.done():
+            outcome()
+
+    def work() -> None:
+        try:
+            result = call(method, url, token, body)
+        except Exception as error:  # noqa: BLE001 -- handed to the awaiting task, which decides
+            outcome = partial(settle, partial(done.set_exception, error))
+        else:
+            outcome = partial(settle, partial(done.set_result, result))
+        try:
+            loop.call_soon_threadsafe(outcome)
+        except RuntimeError:
+            pass  # the loop is gone: the agent stopped while this was in flight
+
+    threading.Thread(target=work, daemon=True).start()
+    return await done
+
+
+def transient(error: Exception) -> bool:
+    """A transport failure worth retrying, as opposed to an answer.
+
+    An HTTP 4xx is Plow answering -- a revoked token, a deleted chat -- and
+    asking again gets the same answer. Retrying those would hide the one thing
+    the log needs to say, so they raise.
+    """
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500
+    return isinstance(error, (OSError, websockets.exceptions.ConnectionClosed))
+
+
+async def identify(base: str, token: str) -> dict:
     """Who am I, which line, which chats. Asked at boot, every boot.
 
     A move changes the answer without changing anything on the VM, so this is
@@ -106,74 +153,100 @@ def identify(base: str, token: str) -> dict:
     """
     for attempt in range(IDENTITY_ATTEMPTS):
         try:
-            return call("GET", f"{base}/v1/agents/cloud/me", token)
+            return await request("GET", f"{base}/v1/agents/cloud/me", token)
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 raise SystemExit("this token names no assistant -- it was deleted, or it is not an agent's") from error
+            if not transient(error):
+                raise SystemExit(f"Plow refused the identity call: HTTP {error.code}") from error
             log.warning("identity call failed: HTTP %s", error.code)
         except OSError as error:
             log.warning("identity call failed: %s", error)
         if attempt < IDENTITY_ATTEMPTS - 1:
-            import time
-            time.sleep(IDENTITY_BACKOFF_S)
+            await asyncio.sleep(IDENTITY_BACKOFF_S)
     raise SystemExit("could not reach Plow to identify -- refusing to start without a line")
 
 
 async def listen(base: str, token: str, chats: dict[str, dict]) -> None:
-    """Mint a ticket, open the socket, answer what arrives. Reconnect forever."""
+    """Mint a ticket, open the socket, answer what arrives. Reconnect on transport failures only."""
     while True:
         try:
-            ticket = call("POST", f"{base}/v1/ws/ticket", token, {})["ticket"]
+            ticket = (await request("POST", f"{base}/v1/ws/ticket", token, {}))["ticket"]
             url = f"{base.replace('http', 'ws', 1)}/v1/ws?ticket={ticket}"
-            async with websockets.connect(url) as socket:
+            # A short close timeout: on SIGTERM the close handshake is the last
+            # thing the agent does, and an unreachable Plow must not stretch it
+            # past the VM's grace period.
+            async with websockets.connect(url, close_timeout=2) as socket:
                 log.info("connected")
                 async for raw in socket:
                     await handle(json.loads(raw), base, token, chats)
-        except Exception as error:  # noqa: BLE001 -- reconnect, never die
+        except Exception as error:
+            if not transient(error):
+                raise
             log.warning("socket closed: %s", type(error).__name__)
-        await asyncio.sleep(5)
+        await asyncio.sleep(RECONNECT_BACKOFF_S)
 
 
 async def handle(frame: dict, base: str, token: str, chats: dict[str, dict]) -> None:
-    if frame.get("type") == "connected" or frame.get("event_type") != "message_received":
+    """One `ChatEvent`. Only `message_received` asks for anything."""
+    if frame.get("event_type") != "message_received":
         return
-    chat_uid = frame.get("chat_id")
-    message = frame.get("data", {}).get("message") or {}
-    sender = message.get("sender") or {}
+    chat_uid = frame["chat_id"]
+    message = frame["data"]["message"]
+    sender = message["sender"]
     # An outbound message is the echo of our own send, and an agent sender that
     # is not a peer is us. Both would have this agent answering itself.
-    if message.get("direction") != "inbound" or sender.get("type") not in ("member", "agent"):
+    if message["direction"] != "inbound":
         return
-    if sender.get("type") == "agent" and sender.get("relationship") != "peer":
+    if sender["type"] == "agent" and sender["relationship"] != "peer":
         return
-    reply = compose_reply(message.get("body") or "", sender, chats.get(chat_uid, {}))
+    reply = compose_reply(message["body"], sender, chats.get(chat_uid, {}))
     if reply:
-        await asyncio.to_thread(call, "POST", f"{base}/v1/chats/{chat_uid}/messages", token, {"body": reply})
+        await request("POST", f"{base}/v1/chats/{chat_uid}/messages", token, {"body": reply})
         log.info("replied in %s", chat_uid)
+
+
+async def run(credentials: dict[str, str]) -> None:
+    """Be the agent until SIGTERM.
+
+    The signal handlers go in before the first request, so there is no window
+    in which a stop has to wait out a network call: whatever the agent is
+    doing when SIGTERM lands -- identifying, backing off, mid-request -- is
+    cancelled, and the process exits.
+    """
+    loop = asyncio.get_running_loop()
+    stopping = asyncio.Event()
+    for received in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(received, stopping.set)
+
+    async def agent() -> None:
+        base = credentials["PLOW_API_BASE"].rstrip("/")
+        token = credentials["PLOW_AGENT_TOKEN"]
+        identity = await identify(base, token)
+        chats = {chat["uid"]: chat for chat in identity.get("chats") or []}
+        log.info("line %s, %d chat(s)", (identity.get("line") or {}).get("uid"), len(chats))
+        await listen(base, token, chats)
+
+    working = asyncio.create_task(agent())
+    stopped = asyncio.create_task(stopping.wait())
+    await asyncio.wait({working, stopped}, return_when=asyncio.FIRST_COMPLETED)
+    if working.done():
+        # The agent gave up on its own -- raise why, so the exit says it.
+        stopped.cancel()
+        working.result()
+    working.cancel()
+    await asyncio.gather(working, return_exceptions=True)
+    log.info("stopping")
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     credentials = read_credentials()
     become_agent()
-    base = credentials["PLOW_API_BASE"].rstrip("/")
-    token = credentials["PLOW_AGENT_TOKEN"]
     log.info("starting as %s, uid %d", credentials["AGENT_ID"], os.getuid())
-    identity = identify(base, token)
-    chats = {chat["uid"]: chat for chat in identity.get("chats") or []}
-    log.info("line %s, %d chat(s)", (identity.get("line") or {}).get("uid"), len(chats))
-
     # SIGTERM is how the VM is stopped. Exiting on it is the whole of the
     # shutdown contract; a container killed after the grace period fails the check.
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    stopping = loop.create_future()
-    for received in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(received, lambda: stopping.done() or stopping.set_result(None))
-    listener = loop.create_task(listen(base, token, chats))
-    loop.run_until_complete(stopping)
-    listener.cancel()
-    log.info("stopping")
+    asyncio.run(run(credentials))
 
 
 if __name__ == "__main__":

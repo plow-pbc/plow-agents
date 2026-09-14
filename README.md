@@ -127,11 +127,11 @@ machine — and asserts, in order:
 
 ```
   ok   the image has a CMD to run as PID 1
-  ok   the image declares no listening ports
   ok   the agent calls GET /v1/agents/cloud/me with its token
   ok   the agent presents the token from the credentials file
-  ok   the agent runs as uid 10000
   ok   the agent opens the chat WebSocket
+  ok   every process but PID 1 runs as uid 10000
+  ok   the agent listens on no port
   ok   the agent replies to one message
   ok   the agent exits cleanly on SIGTERM
 ```
@@ -141,8 +141,8 @@ has nothing to say about whether it would have answered a message:
 
 ```
 plow-agents: ghcr.io/you/my-agent:latest does not satisfy the contract.
-  FAILED: the agent runs as uid 10000
-  saw:    the only uid(s) running are 0
+  FAILED: every process but PID 1 runs as uid 10000
+  saw:    no process runs as uid 10000 -- the only one is PID 1, as uid 0
 ```
 
 **Checkpoint:** every assertion passes.

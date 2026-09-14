@@ -8,6 +8,12 @@ answer an agent reaching for a route this check does not cover would get.
 The WebSocket half is hand-rolled because it is four frames: the handshake, a
 `connected` frame, one `message_received` frame, and whatever the agent sends
 back before it is asked to stop.
+
+The `message_received` frame is not written here. It is `message_received.json`,
+serialized by the Plow API's own `ChatEvent` and `MessageResource` models
+(`tests/regenerate-message-received.py` in this repo makes it from a Plow
+checkout), so an agent written against the published schema reads it exactly
+as it will read the real thing.
 """
 
 from __future__ import annotations
@@ -16,10 +22,10 @@ import base64
 import hashlib
 import json
 import os
-import socket
 import struct
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import resources
 
 # RFC 6455's constant, concatenated with the client's key to prove the server
 # read the handshake rather than merely accepted the socket.
@@ -27,8 +33,11 @@ WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 LINE_UID = "ln_check"
 CHAT_UID = "cht_check"
-MEMBER_UID = "usr_check"
-PROMPT = "plow-agents image check: reply with anything."
+MEMBER_UID = "cpt_check"
+# One account-socket `ChatEvent`, as the Plow API serializes it: the envelope
+# with its `data`, because an agent's ticket names no chat.
+MESSAGE_RECEIVED = json.loads(resources.files(__package__).joinpath("message_received.json").read_text())
+PROMPT = MESSAGE_RECEIVED["data"]["message"]["body"]
 
 
 class Recorder:
@@ -124,7 +133,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.stub.seen.saw("ticket")
             if not self._authorized():
                 return
-            return self._json(200, {"ticket": self.stub.ticket})
+            return self._json(201, {"object": "ws_ticket", "ticket": self.stub.ticket,
+                                    "expires_at": "2099-01-01T00:00:00Z"})
         if self.path == f"/v1/chats/{CHAT_UID}/messages":
             self.stub.seen.saw("reply")
             if not self._authorized():
@@ -154,7 +164,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.stub.seen.saw("delivered")
         while True:
             frame = _read_frame(self.rfile)
-            if frame is None or frame[0] == 0x8:
+            if frame is None:
+                return
+            if frame[0] == 0x8:
+                # Echo the close, as any server does. A client that closes
+                # properly waits for this, and without it would sit out its
+                # close timeout -- past the SIGTERM deadline -- on the stub's
+                # account rather than its own.
+                self.wfile.write(b"\x88" + bytes([len(frame[1][:2])]) + frame[1][:2])
+                self.wfile.flush()
                 return
             if frame[0] == 0x9:  # ping
                 self.wfile.write(b"\x8a" + bytes([len(frame[1])]) + frame[1])
@@ -209,21 +227,9 @@ class Stub:
 
     def message_frame(self) -> dict:
         """One inbound message, shaped as the socket delivers it."""
-        return {
-            "type": "event", "event_type": "message_received", "event_id": "evt_check", "chat_id": CHAT_UID,
-            "data": {"message": {
-                "uid": "msg_check", "chat_id": CHAT_UID, "direction": "inbound", "body": PROMPT,
-                "attachments": [], "sender": {"type": "member", "uid": MEMBER_UID, "display_name": "Owner"},
-            }},
-        }
+        return MESSAGE_RECEIVED
 
 
 def host_gateway() -> str:
     """The name a container reaches this machine by, and the flag that makes it resolve."""
     return "host.docker.internal"
-
-
-def unused_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
