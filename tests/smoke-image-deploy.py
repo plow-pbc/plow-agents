@@ -244,6 +244,10 @@ def main() -> int:
         code, out, _ = run("image", "push", "--image", "docker.io/plow-pbc/reference", cwd=work, base=base, token=token,
                            docker=FakeDocker(digest=other), registry=Registry(realm="https://auth.docker.io/token"))
         check("Docker Hub's token host is the one other realm followed", (code, out.strip()), (0, f"docker.io/plow-pbc/reference@{other}"))
+        code, out, _ = run("image", "push", "--image", "registry.example:5000/plow-pbc/reference", cwd=work, base=base, token=token,
+                           docker=FakeDocker(digest=other), registry=Registry(realm="https://registry.example:5000/token"))
+        check("a registry with a port takes a realm on that same host and port",
+              (code, out.strip()), (0, f"registry.example:5000/plow-pbc/reference@{other}"))
 
         docker = FakeDocker(digest="not-a-digest")
         code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=docker, registry=Registry())
