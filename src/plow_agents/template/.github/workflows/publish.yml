@@ -1,8 +1,7 @@
 # Build, check and publish this agent on a tag push.
 #
 # The digest is the only reference Plow accepts, so the tag here is a handle
-# and nothing more. Make the package public once, after the first run: a new
-# ghcr package is private, and Plow pulls anonymously.
+# and nothing more.
 name: Publish
 on:
   push:

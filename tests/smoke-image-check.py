@@ -294,6 +294,22 @@ def main() -> int:
             refused = True
         check_that("and refuses to write over an existing repo", refused, True)
 
+    # A checkout's symlinks -- a linked parent, a dangling link where a file goes -- are not written through.
+    with tempfile.TemporaryDirectory() as work:
+        outside = os.path.join(work, "outside")
+        os.makedirs(outside)
+        for label, link, points_at in (("a symlinked parent", ".github", outside),
+                                       ("a dangling symlink", "Dockerfile", os.path.join(outside, "Dockerfile"))):
+            repo = os.path.join(work, f"repo-{link}")
+            os.makedirs(repo)
+            os.symlink(points_at, os.path.join(repo, link))
+            try:
+                template.copy_into(repo)
+                refused = False
+            except SystemExit:
+                refused = True
+            check_that(f"init refuses {label}, and writes nothing outside the repo", (refused, os.listdir(outside)), (True, []))
+
     # --- the reference agent owes nothing to Hermes --------------------------
     sources = {name: open(os.path.join(TEMPLATE, name)).read() for name in ("agent.py", "Dockerfile", "README.md")}
     for name, body in sources.items():

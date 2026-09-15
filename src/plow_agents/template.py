@@ -21,16 +21,22 @@ def copy_into(destination: str, *, slug: str = "", image: str = "") -> list[str]
     files = sorted(_walk(str(source)))
     if not files:
         die("the template is missing from this installation")
-    existing = [name for name in files if os.path.exists(os.path.join(destination, name))]
+    # A checkout can hold symlinks: a target that resolves outside the
+    # destination, or any link at all where a file would go, is not written.
+    root = os.path.realpath(destination)
+    targets = {name: os.path.join(root, name) for name in files}
+    escaping = [name for name, target in targets.items() if not os.path.realpath(target).startswith(root + os.sep)]
+    if escaping:
+        die(f"{os.path.join(destination, escaping[0])} resolves outside {destination} -- init does not write through a symlink")
+    existing = [name for name, target in targets.items() if os.path.lexists(target)]
     if existing:
         die(f"{destination} already has {', '.join(existing[:3])} -- init writes a new repo, it does not merge")
     written = []
-    for name in files:
-        target = os.path.join(destination, name)
+    for name, target in targets.items():
         os.makedirs(os.path.dirname(target), exist_ok=True)
         shutil.copyfile(os.path.join(str(source), name), target)
-        written.append(target)
-    _fill(os.path.join(destination, "plow-agents.toml"), slug=slug, image=image)
+        written.append(os.path.join(destination, name))
+    _fill(targets["plow-agents.toml"], slug=slug, image=image)
     return written
 
 
