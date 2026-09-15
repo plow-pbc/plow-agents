@@ -23,6 +23,7 @@ import io
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,7 @@ sys.path.insert(0, SRC)
 
 from websockets.sync.client import connect  # noqa: E402
 
-from plow_agents import check, template  # noqa: E402
+from plow_agents import check, stub, template  # noqa: E402
 
 TEMPLATE = os.path.join(SRC, "plow_agents", "template")
 CONTAINER = "c0ffee"
@@ -314,6 +315,14 @@ def main() -> int:
     check_that("the reference agent refuses a credential missing any of the three keys",
                _refuses(agent["read_credentials"]), True)
 
+    # --- the stub reads no body before the route and the token say whose ----
+    with stub.Stub(host="127.0.0.1") as local:
+        for label, path, token, want in (("unrouted", "/v1/elsewhere", "", 404),
+                                         ("unauthenticated", f"/v1/chats/{stub.CHAT_UID}/messages", "", 401),
+                                         ("authenticated but over 64 KiB", "/v1/ws/ticket", local.token, 413)):
+            check_that(f"an {label} POST claiming a terabyte body is answered at once, and closed",
+                       _huge_post(local.port, path, token), (want, True))
+
     for failure in failures:
         print(f"\n{failure}", file=sys.stderr)
     print(f"\n{'FAILED' if failures else 'PASSED'}: {len(failures)} failing")
@@ -373,6 +382,21 @@ class Plow:
             [sys.executable, "-c", PRIVILEGE_SEAM, os.path.join(TEMPLATE, "agent.py")],
             env={**os.environ, "PLOW_CREDENTIALS": credentials}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return self.agent
+
+
+def _huge_post(port: int, path: str, token: str) -> tuple[int | None, bool]:
+    """POST claiming a terabyte body and sending none: (status, whether the stub then closed)."""
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+        auth = f"Authorization: Bearer {token}\r\n" if token else ""
+        conn.sendall(f"POST {path} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: {10**12}\r\n\r\n".encode())
+        received = b""
+        try:
+            while chunk := conn.recv(4096):
+                received += chunk
+        except TimeoutError:
+            return None, False
+    status = received.split(b" ", 2)[1] if received.startswith(b"HTTP/") else None
+    return (int(status) if status else None), True
 
 
 def _exit_within(process: subprocess.Popen, seconds: float) -> int | None:

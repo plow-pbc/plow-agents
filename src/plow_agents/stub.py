@@ -9,11 +9,11 @@ The WebSocket half is hand-rolled because it is four frames: the handshake, a
 `connected` frame, one `message_received` frame, and whatever the agent sends
 back before it is asked to stop.
 
-The `message_received` frame is not written here. It is `message_received.json`,
-serialized by the Plow API's own `ChatEvent` and `MessageResource` models
-(`tests/regenerate-message-received.py` in this repo makes it from a Plow
-checkout), so an agent written against the published schema reads it exactly
-as it will read the real thing.
+Neither the `message_received` frame nor the identity answer is written here.
+They are `message_received.json` and `identity.json`, serialized by the Plow
+API's own models (`tests/regenerate-fixtures.py` in this repo makes them from a
+Plow checkout), so an agent written against the published schema reads them
+exactly as it will read the real thing.
 """
 
 from __future__ import annotations
@@ -30,13 +30,14 @@ from importlib import resources
 # RFC 6455's constant, concatenated with the client's key to prove the server
 # read the handshake rather than merely accepted the socket.
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+MAX_BODY = 64 * 1024
 
-LINE_UID = "ln_check"
 CHAT_UID = "cht_check"
-MEMBER_UID = "cpt_check"
 # One account-socket `ChatEvent`, as the Plow API serializes it: the envelope
 # with its `data`, because an agent's ticket names no chat.
 MESSAGE_RECEIVED = json.loads(resources.files(__package__).joinpath("message_received.json").read_text())
+# `AgentIdentity`, as `GET /v1/agents/cloud/me` serves it.
+IDENTITY = json.loads(resources.files(__package__).joinpath("identity.json").read_text())
 
 
 class Recorder:
@@ -108,14 +109,18 @@ class _Handler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") == f"Bearer {self.stub.token}":
             return True
         self.stub.seen.bad_auth.append(f"{self.command} {self.path}")
-        self._json(401, {"detail": "not this agent's token"})
+        self._json(401, {"detail": "not this agent's token"}, close=True)
         return False
 
-    def _json(self, status: int, payload: object) -> None:
+    def _json(self, status: int, payload: object, *, close: bool = False) -> None:
         raw = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
+        if close:
+            # A body left unread would be parsed as the next request.
+            self.send_header("Connection", "close")
+            self.close_connection = True
         self.end_headers()
         self.wfile.write(raw)
 
@@ -134,21 +139,24 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
+        # The stub listens on every interface, so a body is read only once the
+        # route and the token say whose it is, and only up to MAX_BODY.
         self._note_token()
-        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        if self.path == "/v1/ws/ticket":
-            self.stub.seen.saw("ticket")
-            if not self._authorized():
-                return
+        event = {"/v1/ws/ticket": "ticket", f"/v1/chats/{CHAT_UID}/messages": "reply"}.get(self.path)
+        if event is None:
+            return self._json(404, {"detail": self.path}, close=True)
+        self.stub.seen.saw(event)
+        if not self._authorized():
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY:
+            return self._json(413, {"detail": f"a body over {MAX_BODY} bytes"}, close=True)
+        body = self.rfile.read(length)
+        if event == "ticket":
             return self._json(201, {"object": "ws_ticket", "ticket": self.stub.ticket,
                                     "expires_at": "2099-01-01T00:00:00Z"})
-        if self.path == f"/v1/chats/{CHAT_UID}/messages":
-            self.stub.seen.saw("reply")
-            if not self._authorized():
-                return
-            self.stub.seen.said((json.loads(body or b"{}").get("body") or "").strip())
-            return self._json(201, {"uid": "msg_reply"})
-        self._json(404, {"detail": self.path})
+        self.stub.seen.said((json.loads(body or b"{}").get("body") or "").strip())
+        return self._json(201, {"uid": "msg_reply"})
 
     def _websocket(self) -> None:
         """Upgrade, say `connected`, deliver one message, then listen until closed."""
@@ -221,18 +229,7 @@ class Stub:
 
     def identity(self) -> dict:
         """`GET /v1/agents/cloud/me`: one line, one chat, no Mac, a signup phrase."""
-        return {
-            "line": {"uid": LINE_UID, "display_name": "plow-agents", "provider_key": "+15555550100", "agent_uid": "agt_check"},
-            "chats": [{
-                "uid": CHAT_UID, "type": "dm", "status": "active",
-                "participants": [
-                    {"type": "member", "uid": MEMBER_UID, "role": "owner", "display_name": "Owner"},
-                    {"type": "agent", "relationship": "self", "line": {"uid": LINE_UID}},
-                ],
-            }],
-            "mcp_url": None,
-            "signup": {"name": "plow-agents", "phrase": "text this to start"},
-        }
+        return IDENTITY
 
     def message_frame(self) -> dict:
         """One inbound message, shaped as the socket delivers it."""

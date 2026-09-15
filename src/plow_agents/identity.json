@@ -1,0 +1,59 @@
+{
+  "line": {
+    "uid": "ln_check",
+    "object": "line",
+    "provider_type": "imessage",
+    "provider_key": "+15555550100",
+    "display_name": "plow-agents"
+  },
+  "chats": [
+    {
+      "uid": "cht_check",
+      "object": "chat",
+      "status": "active",
+      "trusted": true,
+      "provider_key": "+15555550100",
+      "display_name": null,
+      "failure_reason": null,
+      "participants": [
+        {
+          "type": "member",
+          "uid": "cpt_check",
+          "object": "chat_participant",
+          "status": "active",
+          "display_name": "Owner",
+          "relationship": null,
+          "role": "owner",
+          "provider_type": "imessage",
+          "provider_key": "+15555550101",
+          "verified_at": null,
+          "joined_at": "2026-09-14T12:00:00Z"
+        },
+        {
+          "type": "agent",
+          "line": {
+            "uid": "ln_check",
+            "object": "line",
+            "provider_type": "imessage",
+            "provider_key": "+15555550100",
+            "display_name": "plow-agents"
+          },
+          "relationship": "self",
+          "represents_participant_uid": null
+        }
+      ],
+      "created_at": "2026-09-14T12:00:00Z"
+    }
+  ],
+  "mcp_url": null,
+  "signup": {
+    "name": "plow-agents",
+    "phrase": "text this to start"
+  },
+  "agent": {
+    "uid": "agt_check",
+    "name": "plow-agents",
+    "provider": "exe:ghcr.io/you/plow-agents@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "settings": {}
+  }
+}

@@ -11,6 +11,7 @@
       "chat_uid": "cht_check",
       "direction": "inbound",
       "body": "plow-agents image check: reply with anything.",
+      "mentions": null,
       "effect": null,
       "status": "received",
       "sender": {
