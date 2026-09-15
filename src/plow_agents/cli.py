@@ -439,7 +439,15 @@ def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: 
     # holding the line with no container to answer on it.
     run(this.docker, ["docker", "compose", "build"], what="docker compose build")
     mint(ctx, line=line, credential_file=CREDENTIAL_FILE, agent_api_base=None)
-    run(this.docker, ["docker", "compose", "up", "--no-build", "-d"], what="docker compose up")
+    try:
+        run(this.docker, ["docker", "compose", "up", "--no-build", "-d"], what="docker compose up")
+    except BaseException:
+        # The mint is the only thing that got as far as Plow: nothing is going
+        # to answer on that line, and the credential is a live token sitting in
+        # the directory the next build reads.
+        log("docker compose up failed -- retiring the agent just minted for this line.")
+        revoke(ctx, line=None, credential_file=CREDENTIAL_FILE)
+        raise
     print("docker compose logs -f")
 
 

@@ -12,9 +12,9 @@ Do the steps yourself, or hand this page to an AI coding agent and let it do mos
   `curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`.
 - **Git**, which `uv tool install` uses to fetch this repo.
 - **A phone that can text** — logging in means texting a code from the phone that owns your Plow account.
-- **Docker** — only for the two verbs that build and push an image. `login`, `lines`,
-  `login`, `lines` and `mint` never touch it, and neither does `deploy` unless you pass `--local`,
-  which builds and runs the container here.
+- **Docker** — only for the verbs that touch an image: `image build`, `image push`, and
+  `deploy --local`, which builds and runs the container here. `login`, `lines` and `mint` never
+  touch it, and neither does a `deploy` to the cloud.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
   anonymously, so the image must be public.
 
