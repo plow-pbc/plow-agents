@@ -251,12 +251,17 @@ that pull is not anonymous.
 
 ```sh
 plow-agents deploy
-plow-agents deploy --line ln_a1b2c3                  # when more than one line is free
-plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
+plow-agents deploy --line ln_a1b2c3                                  # when more than one line is free
+plow-agents deploy ghcr.io/you/my-agent@sha256:9c21...ff04 --line ln_a1b2c3   # any image, by digest
+plow-agents deploy exe:life --line ln_a1b2c3                         # a listing, by slug
 ```
 
-With no digest it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
-refuses if there is more than one rather than picking.
+With no target it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
+refuses if there is more than one, listing them, rather than picking.
+
+To run it on this machine instead, `deploy --local` mints a credential for the line and runs
+`docker compose up --build -d` on this checkout's `compose.yml` — see
+[Self-hosted](#self-hosted-run-the-container-yourself).
 
 Plow boots the image with `PLOW_API_BASE` in its environment. On exe.dev that address is a proxy
 that adds the agent's token to every request, so the token never reaches the VM and
@@ -292,11 +297,12 @@ git clone https://github.com/plow-pbc/plow-hermes-agent.git
 cd plow-hermes-agent
 plow-agents login
 plow-agents lines
-plow-agents mint ln_a1b2c3
-docker compose up --build -d
+plow-agents deploy --local --line ln_a1b2c3
 ```
 
-`mint` writes `./plow-credentials`, mode 600. Run it **before** `up`. The first build takes a few
+`deploy --local` runs `mint`, which writes `./plow-credentials`, mode 600, and then
+`docker compose up --build -d`; it refuses a directory with no `compose.yml`. `mint` followed by
+`docker compose up --build -d` does the same in two steps. The first build takes a few
 minutes. Watch `docker compose logs -f agent` until `plow-init: configured ... as cht_` appears,
 then text the line to talk to it.
 
@@ -380,7 +386,8 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
 | `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will: fail on the contract, warn on the advice. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
-| `deploy [DIGEST] [--line]` | Run a pushed digest on one of your lines. |
+| `deploy [TARGET] [--line]` | Run `image@sha256:…` or `exe:<slug>` (default `last_pushed`) on one of your lines, on exe.dev. |
+| `deploy --local [--line]` | `mint`, then `docker compose up --build -d` on this checkout's `compose.yml`. |
 | `agents` | What is deployed on this account: line, slug, status, image digest. |
 | `mint <line>` | A self-hosted credential for one line, into `./plow-credentials`. |
 | `rotate` | Replace that credential. |

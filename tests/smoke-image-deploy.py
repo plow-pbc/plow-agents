@@ -70,7 +70,7 @@ class Stub(BaseHTTPRequestHandler):
             if held:
                 return self._send(409, {"detail": {"code": "AGENT_EXISTS", "message": f"line already answers as {held}"}})
             agent = {"uid": "agt_new", "provider": body["provider"], "line": {"uid": body["line_uid"]}, "status": "provisioning"}
-            return self._send(201, {"agent": agent, "token": None})
+            return self._send(201, {"agent": agent, "token": "plow_minted" if body["provider"] == "self_hosted" else None})
         self._send(404, {"detail": self.path})
 
     def log_message(self, *_: object) -> None:
@@ -339,6 +339,34 @@ def main() -> int:
         os.makedirs(empty)
         code, _, err = run("deploy", SHA, cwd=empty, base=base, token=token)
         check("deploy with no image configured names the field", (code != 0, "no image in" in err), (True, True))
+
+        # --- deploy's targets: a listing, or any image by digest --------------
+        Stub.created.clear()
+        code, out, _ = run("deploy", "exe:life", "--line", FREE, cwd=work, base=base, token=token)
+        check("deploy exe:life asks Plow for the listing by slug", (code, Stub.created[-1]),
+              (0, {"name": "life", "line_uid": FREE, "provider": "exe:life"}))
+        Stub.created.clear()
+        run("deploy", f"ghcr.io/other/agent@{SHA}", "--line", FREE, cwd=empty, base=base, token=token)
+        check("deploy image@sha256 needs no toml and sends that image", Stub.created[-1]["provider"], f"exe:ghcr.io/other/agent@{SHA}")
+        Stub.created.clear()
+        code, _, err = run("deploy", "ghcr.io/other/agent:latest", cwd=work, base=base, token=token)
+        check("deploy refuses an image by tag", (code != 0, Stub.created), (True, []))
+
+        # --- deploy --local: mint, then compose up here -----------------------
+        local = os.path.join(work, "local")
+        os.makedirs(local)
+        code, _, err = run("deploy", "--local", "--line", FREE, cwd=local, base=base, token=token)
+        check("deploy --local with no compose.yml says so and mints nothing",
+              (code != 0, "no compose.yml" in err, os.path.exists(os.path.join(local, "plow-credentials"))), (True, True, False))
+        with open(os.path.join(local, "compose.yml"), "w") as handle:
+            handle.write("services: {}\n")
+        docker = FakeDocker()
+        Stub.created.clear()
+        code, out, _ = run("deploy", "--local", "--line", FREE, cwd=local, base=base, token=token, docker=docker)
+        check("deploy --local mints a self-hosted credential first",
+              (code, Stub.created[-1]["provider"], os.path.isfile(os.path.join(local, "plow-credentials"))), (0, "self_hosted", True))
+        check("then runs compose up here", docker.argvs, [["docker", "compose", "up", "--build", "-d"]])
+        check("and ends on the command to follow its logs", out.strip().splitlines()[-1], "docker compose logs -f")
 
         # --- agents ---------------------------------------------------------
         code, out, _ = run("agents", cwd=work, base=base, token=token)
