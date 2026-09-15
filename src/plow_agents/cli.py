@@ -426,8 +426,12 @@ def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: 
         die(f"no compose.yml in {os.getcwd()} -- --local runs `docker compose up` here; copy compose.example.yml from "
             "https://github.com/plow-pbc/plow-agents beside your Dockerfile first")
     line = line or _only_free_line(this.api_base, this.token())
+    # Build before minting: a build is where a Dockerfile, a base image or a
+    # registry fails, and a failure after the mint would leave a live agent
+    # holding the line with no container to answer on it.
+    run(this.docker, ["docker", "compose", "build"], what="docker compose build")
     mint(ctx, line=line, credential_file=CREDENTIAL_FILE, agent_api_base=None)
-    run(this.docker, ["docker", "compose", "up", "--build", "-d"], what="docker compose up")
+    run(this.docker, ["docker", "compose", "up", "--no-build", "-d"], what="docker compose up")
     print("docker compose logs -f")
 
 

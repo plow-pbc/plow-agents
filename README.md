@@ -13,7 +13,8 @@ Do the steps yourself, or hand this page to an AI coding agent and let it do mos
 - **Git**, which `uv tool install` uses to fetch this repo.
 - **A phone that can text** — logging in means texting a code from the phone that owns your Plow account.
 - **Docker** — only for the two verbs that build and push an image. `login`, `lines`,
-  `mint` and `deploy` never touch it.
+  `login`, `lines` and `mint` never touch it, and neither does `deploy` unless you pass `--local`,
+  which builds and runs the container here.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
   anonymously, so the image must be public.
 
@@ -223,9 +224,11 @@ plow-agents lines
 plow-agents deploy --local --line ln_a1b2c3
 ```
 
-`deploy --local` runs `mint`, which writes `./plow-credentials`, mode 600, and then
-`docker compose up --build -d`; it refuses a directory with no `compose.yml`. `mint` followed by
-`docker compose up --build -d` does the same in two steps. The first build takes a few
+`deploy --local` needs Docker here. It runs `docker compose build` **first**, then `mint`, which
+writes `./plow-credentials`, mode 600, and then `docker compose up --no-build -d`. A build that
+fails mints nothing, so a failed run leaves no agent holding the line. It refuses a directory with
+no `compose.yml`. `mint` followed by `docker compose up --build -d` does the same in two steps.
+The first build takes a few
 minutes. Watch `docker compose logs -f agent` until `plow-init: configured ... as cht_` appears,
 then text the line to talk to it.
 
