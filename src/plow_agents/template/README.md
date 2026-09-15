@@ -61,8 +61,10 @@ plow-agents deploy
 plow-agents agents
 ```
 
-Push once, make the package public — a new ghcr package is private and Plow
-pulls anonymously — then push again. The full walkthrough, including the
+Plow pulls anonymously, so the package must be public. Pushing a `v*` tag runs
+the Action, and a package it creates from a public repo comes out public,
+linked to the repo. A package created by a local `image push` is private until
+you make it public: push once, flip it, push again. The full walkthrough, including the
 registry login and the visibility switch, is in the
 [plow-agents README](https://github.com/plow-pbc/plow-agents#readme).
 

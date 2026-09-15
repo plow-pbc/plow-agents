@@ -196,18 +196,24 @@ Three things happen, in order: the tag is pushed; the digest is read back **with
 all**, which is the same anonymous pull Plow will do; and `last_pushed` is written into
 `plow-agents.toml`.
 
-On a first push to ghcr this stops at the second one, because **a brand-new ghcr package is
-private**. The package does not exist until you have pushed, so it cannot be made public any
-earlier. Do it now:
+Whether the second step passes the first time depends on what created the package:
 
-1. Open `https://github.com/users/you/packages/container/plow-agents/settings`
-   (an organisation's is `https://github.com/orgs/your-org/packages/container/plow-agents/settings`).
-2. **Danger Zone → Change visibility → Public.**
+- **The template's Action created it.** Pushing a `v*` tag runs `.github/workflows/publish.yml`, and
+  a package that workflow creates from a **public** repo comes out **public**, linked to the repo.
+  There is nothing to switch. The run's `image push` step prints the digest; deploy it with
+  `plow-agents deploy sha256:…`.
+- **A local push created it.** A package created by `plow-agents image push` from your own machine
+  is **private** until you make it public, so the first push stops at the second step. The package
+  does not exist until you have pushed, so it cannot be made public any earlier. Do it now:
 
-On Docker Hub the switch is on the repository's **Settings** tab. ECR Public repositories are
-public from the start, and have no such step.
+  1. Open `https://github.com/users/you/packages/container/plow-agents/settings`
+     (an organisation's is `https://github.com/orgs/your-org/packages/container/plow-agents/settings`).
+  2. **Danger Zone → Change visibility → Public.**
 
-Then run the same command again — it is safe to repeat, and this time it gets all the way through:
+  On Docker Hub the switch is on the repository's **Settings** tab. ECR Public repositories are
+  public from the start, and have no such step.
+
+  Then run the same command again — it is safe to repeat, and this time it gets all the way through:
 
 ```sh
 plow-agents image push
