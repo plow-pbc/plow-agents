@@ -85,8 +85,9 @@ class Registry:
     to the anonymous token -- a registry that issues it and then refuses it.
     """
 
-    def __init__(self, *, public: bool = True, manifest_status: int = 200, media: str = "application/vnd.oci.image.manifest.v1+json") -> None:
-        self.public, self.manifest_status, self.media = public, manifest_status, media
+    def __init__(self, *, public: bool = True, manifest_status: int = 200, media: str = "application/vnd.oci.image.manifest.v1+json",
+                 realm: str = "https://ghcr.io/token") -> None:
+        self.public, self.manifest_status, self.media, self.realm = public, manifest_status, media, realm
         self.requests: list[httpx.Request] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -98,7 +99,7 @@ class Registry:
         if request.url.path == f"/v2/plow-pbc/reference/manifests/{SHA}" or request.url.path.startswith("/v2/plow-pbc/reference/manifests/"):
             if request.headers.get("Authorization") != "Bearer anonymous":
                 return httpx.Response(401, headers={"WWW-Authenticate":
-                    'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:plow-pbc/reference:pull"'})
+                    f'Bearer realm="{self.realm}",service="ghcr.io",scope="repository:plow-pbc/reference:pull"'})
             if self.manifest_status != 200:
                 return httpx.Response(self.manifest_status)
             return httpx.Response(200, headers={"Content-Type": self.media}, content=b"{}")
@@ -233,6 +234,16 @@ def main() -> int:
             code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=FakeDocker(digest=other), registry=registry)
             check(f"push fails on {label}, saying so", (code != 0, words in err), (True, True))
             check(f"and {label} leaves last_pushed as it was", config.load(work).last_pushed, SHA)
+
+        # The realm is the registry's to name; a token is only fetched from where it should come from.
+        for label, realm in (("an http realm", "http://ghcr.io/token"), ("a realm on another host", "https://attacker.example/token")):
+            registry = Registry(realm=realm)
+            code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=FakeDocker(digest=other), registry=registry)
+            check(f"push refuses {label}, naming it, and never asks it for a token",
+                  (code != 0, realm in err, [r.url.path for r in registry.requests if r.url.path == "/token"]), (True, True, []))
+        code, out, _ = run("image", "push", "--image", "docker.io/plow-pbc/reference", cwd=work, base=base, token=token,
+                           docker=FakeDocker(digest=other), registry=Registry(realm="https://auth.docker.io/token"))
+        check("Docker Hub's token host is the one other realm followed", (code, out.strip()), (0, f"docker.io/plow-pbc/reference@{other}"))
 
         docker = FakeDocker(digest="not-a-digest")
         code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=docker, registry=Registry())

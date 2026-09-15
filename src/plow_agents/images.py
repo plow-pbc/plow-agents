@@ -22,6 +22,8 @@ DEFAULT_TAG = "latest"
 PUSHED_DIGEST = re.compile(r"digest: (sha256:[0-9a-f]{64})")
 MANIFEST_TYPES = ("application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json")
 INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json")
+# A registry whose Bearer realm is on a host other than its own.
+TOKEN_HOSTS = {"registry-1.docker.io": "auth.docker.io"}
 
 
 def build(runner: Runner, *, image: str, tag: str, context: str) -> str:
@@ -60,7 +62,7 @@ def verify_public(image: str, digest: str) -> None:
         with httpx.Client(transport=api.TRANSPORT, trust_env=False, timeout=api.TIMEOUT_S) as client:
             response = client.get(url, headers=accept)
             if response.status_code == 401:
-                token = _anonymous_token(client, response.headers.get("WWW-Authenticate", ""), name)
+                token = _anonymous_token(client, response.headers.get("WWW-Authenticate", ""), host, name)
                 if token:
                     response = client.get(url, headers={**accept, "Authorization": f"Bearer {token}"})
     except httpx.HTTPError as error:
@@ -85,8 +87,12 @@ def registry_of(image: str) -> tuple[str, str]:
     return "registry-1.docker.io", name if "/" in name else f"library/{name}"
 
 
-def _anonymous_token(client: httpx.Client, challenge: str, name: str) -> str | None:
-    """The pull token a Bearer challenge's realm gives to a caller with no credentials, if it gives one."""
+def _anonymous_token(client: httpx.Client, challenge: str, host: str, name: str) -> str | None:
+    """The pull token a Bearer challenge's realm gives to a caller with no credentials, if it gives one.
+
+    The realm is the registry's to name, so it is only followed over https to
+    the registry's own host -- or Docker Hub's, whose tokens come from another.
+    """
     scheme, _, params = challenge.partition(" ")
     if scheme.lower() != "bearer":
         return None
@@ -94,6 +100,9 @@ def _anonymous_token(client: httpx.Client, challenge: str, name: str) -> str | N
     realm = fields.get("realm")
     if not realm:
         return None
+    parsed = httpx.URL(realm)
+    if parsed.scheme != "https" or parsed.host != TOKEN_HOSTS.get(host, host):
+        die(f"{host} asked for a token from {realm} -- refusing a realm that is not https on {TOKEN_HOSTS.get(host, host)}")
     query = {"service": fields.get("service", ""), "scope": fields.get("scope") or f"repository:{name}:pull"}
     answer = client.get(realm, params={key: value for key, value in query.items() if value})
     if answer.status_code != 200:
