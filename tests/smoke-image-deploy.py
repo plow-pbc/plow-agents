@@ -363,10 +363,29 @@ def main() -> int:
         docker = FakeDocker()
         Stub.created.clear()
         code, out, _ = run("deploy", "--local", "--line", FREE, cwd=local, base=base, token=token, docker=docker)
-        check("deploy --local mints a self-hosted credential first",
+        check("deploy --local builds, then mints a self-hosted credential",
               (code, Stub.created[-1]["provider"], os.path.isfile(os.path.join(local, "plow-credentials"))), (0, "self_hosted", True))
-        check("then runs compose up here", docker.argvs, [["docker", "compose", "up", "--build", "-d"]])
+        check("in that order: the build comes before the mint, and the run does not build again",
+              docker.argvs, [["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
         check("and ends on the command to follow its logs", out.strip().splitlines()[-1], "docker compose logs -f")
+
+        docker = FakeDocker()
+        Stub.created.clear()
+        code, _, err = run("deploy", "--local", "--line", FREE, cwd=local, base=base, token=token, docker=docker)
+        check("a second --local refuses the credential already here, before anything is built",
+              (code != 0, "already exists" in err, docker.argvs, Stub.created), (True, True, [], []))
+
+        failing = os.path.join(work, "failing-build")
+        os.makedirs(failing)
+        with open(os.path.join(failing, "compose.yml"), "w") as handle:
+            handle.write("services: {}\n")
+        docker = FakeDocker(fail="build")
+        Stub.created.clear()
+        code, _, err = run("deploy", "--local", "--line", FREE, cwd=failing, base=base, token=token, docker=docker)
+        check("a build that fails mints nothing and leaves no credential",
+              (code != 0, "build failed" in err, Stub.created, os.path.exists(os.path.join(failing, "plow-credentials"))),
+              (True, True, [], False))
+        check("and it never reached compose up", docker.argvs, [["docker", "compose", "build"]])
 
         # --- agents ---------------------------------------------------------
         code, out, _ = run("agents", cwd=work, base=base, token=token)

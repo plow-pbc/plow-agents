@@ -447,16 +447,28 @@ def _cloud_target(target: str | None, settings: config.Config) -> tuple[str, str
 
 
 def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: str | None) -> None:
-    """`mint`, then `docker compose up` on this checkout's compose.yml."""
+    """`docker compose build`, then `mint`, then `docker compose up --no-build` on this checkout's compose.yml."""
     if target is not None:
         die("--local runs this checkout's compose.yml -- it takes no image or slug")
     compose = os.path.abspath("compose.yml")
     if not os.path.isfile(compose):
         die(f"no compose.yml in {os.getcwd()} -- --local runs `docker compose up` here; copy compose.example.yml from "
             "https://github.com/plow-pbc/plow-agents beside your Dockerfile first")
+    # Before the build, not just before the mint: a build reads this directory,
+    # and a credential already sitting in it is a live token for `COPY . .` to
+    # bake into the image. `mint` checks again, for its own callers and for a
+    # file that appears in between.
+    credential = os.path.abspath(CREDENTIAL_FILE)
+    if os.path.exists(credential):
+        die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
+            "have confirmed whose it is, before building an image from this directory")
     line = line or _only_free_line(this.api_base, this.token())
+    # Build before minting: a build is where a Dockerfile, a base image or a
+    # registry fails, and a failure after the mint would leave a live agent
+    # holding the line with no container to answer on it.
+    run(this.docker, ["docker", "compose", "build"], what="docker compose build")
     mint(ctx, line=line, credential_file=CREDENTIAL_FILE, agent_api_base=None)
-    run(this.docker, ["docker", "compose", "up", "--build", "-d"], what="docker compose up")
+    run(this.docker, ["docker", "compose", "up", "--no-build", "-d"], what="docker compose up")
     print("docker compose logs -f")
 
 

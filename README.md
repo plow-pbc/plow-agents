@@ -21,8 +21,9 @@ else it prints is a warning.
   `curl -LsSf https://astral.sh/uv/install.sh | sh`, or `brew install uv`.
 - **Git**, which `uv tool install` uses to fetch this repo.
 - **A phone that can text** — logging in means texting a code from the phone that owns your Plow account.
-- **Docker** — only for the three verbs that build, check and push an image. `login`, `lines`,
-  `mint` and `deploy` never touch it.
+- **Docker** — for the three verbs that build, check and push an image. `login`, `lines` and `mint`
+  never touch it, and neither does `deploy` unless you pass `--local`, which builds and runs the
+  container here.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
   anonymously, so the image must be public. Write a Docker Hub image with its host,
   `docker.io/you/plow-agents`: Plow reads the registry from the reference, and a bare `you/plow-agents`
@@ -252,8 +253,8 @@ plow-agents deploy exe:life --line ln_a1b2c3                         # a listing
 With no target it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
 refuses if there is more than one, listing them, rather than picking.
 
-To run it on this machine instead, `deploy --local` mints a credential for the line and runs
-`docker compose up --build -d` on this checkout's `compose.yml` — see
+To run it on this machine instead, `deploy --local` builds this checkout's `compose.yml`, mints a
+credential for the line, and starts it with `docker compose up --no-build -d` — see
 [Self-hosted](#self-hosted-run-the-container-yourself).
 
 Plow boots the image with `PLOW_API_BASE` in its environment. On exe.dev that address is a proxy
@@ -293,9 +294,12 @@ plow-agents lines
 plow-agents deploy --local --line ln_a1b2c3
 ```
 
-`deploy --local` runs `mint`, which writes `./plow-credentials`, mode 600, and then
-`docker compose up --build -d`; it refuses a directory with no `compose.yml`. `mint` followed by
-`docker compose up --build -d` does the same in two steps. The first build takes a few
+`deploy --local` needs Docker here. It runs `docker compose build` **first**, then `mint`, which
+writes `./plow-credentials`, mode 600, and then `docker compose up --no-build -d`. A build that
+fails mints nothing, so a failed run leaves no agent holding the line. It refuses a directory with
+no `compose.yml`, and an existing `./plow-credentials` before it builds anything, since a build
+reads this directory. `docker compose build`, then `mint`, then `docker compose up --no-build -d`
+does the same by hand. The first build takes a few
 minutes. Watch `docker compose logs -f agent` until `plow-init: configured ... as cht_` appears,
 then text the line to talk to it.
 
@@ -380,7 +384,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will: fail on the contract, warn on the advice. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [TARGET] [--line]` | Run `image@sha256:…` or `exe:<slug>` (default `last_pushed`) on one of your lines, on exe.dev. |
-| `deploy --local [--line]` | `mint`, then `docker compose up --build -d` on this checkout's `compose.yml`. |
+| `deploy --local [--line]` | `docker compose build`, then `mint`, then `docker compose up --no-build -d` on this checkout's `compose.yml`. |
 | `agents` | What is deployed on this account: line, slug, status, image digest. |
 | `mint <line>` | A self-hosted credential for one line, into `./plow-credentials`. |
 | `rotate` | Replace that credential. |
