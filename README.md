@@ -123,8 +123,7 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 Everything above it keeps [the contract](#the-contract) and follows the advice: read
 `PLOW_API_BASE` and, if set, `PLOW_AGENT_TOKEN` from the environment, call
 `GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot, open the chat WebSocket, answer, and exit
-on SIGTERM. Any image that keeps the
-contract works — the reference agent is one, not the one.
+on SIGTERM. Any image that keeps the contract works — the reference agent is one, not the one.
 
 ## Step 4 — Build the image
 
@@ -258,6 +257,10 @@ plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
 
 With no digest it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
 refuses if there is more than one rather than picking.
+
+Plow boots the image with `PLOW_API_BASE` in its environment. On exe.dev that address is a proxy
+that adds the agent's token to every request, so the token never reaches the VM and
+`PLOW_AGENT_TOKEN` is not set: an image that insists on it never gets past boot.
 
 Plow answers before the machine is built, so `deploy` says *requested* and stops there. `agents`
 is what tells you how it ended:
