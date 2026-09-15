@@ -101,6 +101,21 @@ class _Handler(BaseHTTPRequestHandler):
     def stub(self) -> Stub:
         return self.server.stub  # type: ignore[attr-defined]
 
+    def _route(self) -> bool:
+        """Strip this run's unguessable prefix, or answer 404 having noted nothing.
+
+        The stub listens on every interface and the tokenless boot shape gives
+        the container no secret to present, so the prefix is the secret: only
+        something handed this run's `PLOW_API_BASE` can be under it, and a LAN
+        peer guessing routes never reaches the recorder.
+        """
+        realm = self.stub.realm
+        if self.path == realm or self.path.startswith(realm + "/"):
+            self.path = self.path[len(realm):] or "/"
+            return True
+        self._json(404, {"detail": self.path}, close=True)
+        return False
+
     def _note_token(self) -> None:
         # No token of its own is the exe.dev shape: the integration in front of
         # the API adds the bearer, so whatever arrives here already carries the
@@ -128,6 +143,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
+        if not self._route():
+            return
         self._note_token()
         if self.path.startswith("/v1/ws?") or self.path == "/v1/ws":
             return self._websocket()
@@ -143,7 +160,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         # The stub listens on every interface, so a body is read only once the
-        # route and the token say whose it is, and only up to MAX_BODY.
+        # realm, the route and the token say whose it is, and only up to MAX_BODY.
+        if not self._route():
+            return
         self._note_token()
         event = {"/v1/ws/ticket": "ticket", f"/v1/chats/{CHAT_UID}/messages": "reply"}.get(self.path)
         if event is None:
@@ -205,6 +224,8 @@ class Stub:
 
     def __init__(self, *, host: str = "0.0.0.0", token: str | None = None) -> None:  # noqa: S104 -- the container has to reach it
         self.token = token
+        # Every route this run answers hangs off here. See `_route`.
+        self.realm = "/chk_" + os.urandom(16).hex()
         self.ticket = "tkt_" + os.urandom(16).hex()
         self.seen = Recorder()
         self._server = ThreadingHTTPServer((host, 0), _Handler)
@@ -227,8 +248,11 @@ class Stub:
         adds the bearer on the way through, so neither `PLOW_AGENT_TOKEN` nor
         `AGENT_ID` is set there. An image that requires either would fail on
         every bare-image deploy, and this is where it should find that out.
+
+        The base carries this run's realm, so the container is the only thing
+        on the network that knows where the stub answers.
         """
-        environment = {"PLOW_API_BASE": f"http://{host}:{self.port}"}
+        environment = {"PLOW_API_BASE": f"http://{host}:{self.port}{self.realm}"}
         return environment if self.token is None else {**environment, "PLOW_AGENT_TOKEN": self.token}
 
     def identity(self) -> dict:

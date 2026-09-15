@@ -101,7 +101,8 @@ image = "ghcr.io/you/plow-agents"
 directory; `--slug` and `--image` override it for one run without writing to it.
 
 `init` writes into an empty directory or an existing checkout, and refuses to overwrite any file
-it would write.
+it would write. A refusal leaves the directory as it found it: either the whole template lands or
+none of it does.
 
 ## Step 3 — Make it yours
 
@@ -346,8 +347,8 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 # Sharp edges
 
 - **`image check` serves a stub Plow on every interface** for the length of the run, because the
-  container has to reach it. Its token is random per run and dies with the check, but on a shared
-  network that port is briefly open.
+  container has to reach it. Every route it answers hangs off a random per-run path that only your
+  container is told, so a LAN peer that finds the port gets a 404, but the port is briefly open.
 - **`image check` cannot see inside your image.** It checks what is observable from outside: the
   declared CMD and what the agent said to Plow. An image that passes still has to be right.
 - **A tag is never a reference.** Plow takes a digest-pinned `name@sha256:…` or a listing slug, and

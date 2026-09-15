@@ -6,6 +6,7 @@ The files live beside this module as `template/` and ship in the wheel, so
 
 from __future__ import annotations
 
+import contextlib
 import os
 from importlib import resources
 
@@ -27,18 +28,32 @@ def copy_into(destination: str, *, slug: str = "", image: str = "") -> list[str]
     escaping = [name for name, target in targets.items() if not os.path.realpath(target).startswith(root + os.sep)]
     if escaping:
         die(f"{os.path.join(destination, escaping[0])} resolves outside {destination} -- init does not write through a symlink")
-    written = []
-    for name, target in targets.items():
-        body = _read(os.path.join(str(source), name))
-        if name == "plow-agents.toml":
-            body = _filled(body, slug=slug, image=image)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        # `xb`, so the only thing standing between a file and this write is the
-        # kernel: a scan first and a write after is a window in which an editor,
-        # a checkout or a second `init` can put a file there to be truncated.
-        with open(target, "xb") as handle:
-            handle.write(body)
-        written.append(os.path.join(destination, name))
+    written, made = [], []
+    try:
+        for name, target in targets.items():
+            body = _read(os.path.join(str(source), name))
+            if name == "plow-agents.toml":
+                body = _filled(body, slug=slug, image=image)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            # `xb`, so the only thing standing between a file and this write is the
+            # kernel: a scan first and a write after is a window in which an editor,
+            # a checkout or a second `init` can put a file there to be truncated.
+            with open(target, "xb") as handle:
+                handle.write(body)
+            made.append(target)
+            written.append(os.path.join(destination, name))
+    except FileExistsError:
+        # A collision half way through leaves a checkout part-generated, and the
+        # retry then collides on a file this run wrote rather than on theirs.
+        # Either the whole template lands or none of it does.
+        for path in made:
+            os.remove(path)
+            # And the directories that held them, up to the first one that was
+            # already in use -- which is at worst the destination itself, since
+            # the file this run collided with is still sitting in it.
+            with contextlib.suppress(OSError):
+                os.removedirs(os.path.dirname(path))
+        raise
     return written
 
 

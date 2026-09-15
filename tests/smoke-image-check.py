@@ -18,12 +18,14 @@ import contextlib
 import io
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
@@ -146,6 +148,9 @@ def main() -> int:
                sorted(docker.environment), ["PLOW_API_BASE"])
     check_that("and names the stub by the host a container reaches this machine on",
                docker.environment.get("PLOW_API_BASE", "").startswith("http://host.docker.internal:"), True)
+    check_that("under a per-run path only the container is told",
+               bool(re.fullmatch(r"http://host\.docker\.internal:\d+/chk_[0-9a-f]{32}",
+                                 docker.environment.get("PLOW_API_BASE", ""))), True)
     check_that("it is started with no command override",
                [argv[:5] + argv[-1:] for argv in docker.argvs if argv[1] == "run"],
                [["docker", "run", "--detach", "--add-host", "host.docker.internal:host-gateway", "ghcr.io/you/plow-agents:latest"]])
@@ -210,6 +215,21 @@ def main() -> int:
         check_that("and refuses to write over an existing repo, naming the file",
                    os.path.basename(refused) in shipped, True)
 
+    # A collision half way through leaves the checkout as it was found.
+    with tempfile.TemporaryDirectory() as work:
+        repo = os.path.join(work, "repo")
+        os.makedirs(repo)
+        with open(os.path.join(repo, "README.md"), "w") as handle:
+            handle.write("mine")
+        try:
+            template.copy_into(repo)
+            refused = ""
+        except FileExistsError as error:
+            refused = os.path.basename(error.filename or "")
+        check_that("init refuses an existing README.md", refused, "README.md")
+        check_that("and removes the files it had already written", sorted(os.listdir(repo)), ["README.md"])
+        check_that("leaving theirs untouched", open(os.path.join(repo, "README.md")).read(), "mine")
+
     # A checkout's symlinks -- a linked parent, a dangling link where a file goes -- are not written through.
     with tempfile.TemporaryDirectory() as work:
         outside = os.path.join(work, "outside")
@@ -247,11 +267,22 @@ def main() -> int:
     check_that("the reference agent refuses to start without PLOW_API_BASE", _refuses(agent["read_environment"]), True)
     check_that("and needs nothing else", agent["read_environment"]({"PLOW_API_BASE": "http://x/"}), ("http://x", None))
 
+    # --- a peer that does not know the realm cannot satisfy the assertion ---
+    with stub.Stub(host="127.0.0.1") as local:
+        base = f"http://127.0.0.1:{local.port}"
+        for label, url in (("the bare identity route", f"{base}/v1/agents/cloud/me"),
+                           ("a guessed realm", f"{base}/chk_{'0' * 32}/v1/agents/cloud/me")):
+            check_that(f"a tokenless peer calling {label} is 404ed", _status(url), 404)
+        check_that("and none of it counts as the image calling the API", local.seen.token.is_set(), False)
+        check_that("while the realm it handed the container does", _status(f"{base}{local.realm}/v1/agents/cloud/me"), 200)
+        check_that("and that one counts", local.seen.token.is_set(), True)
+
     # --- the stub reads no body before the route and the token say whose ----
     with stub.Stub(host="127.0.0.1", token="plow_x") as local:
-        for label, path, token, want in (("unrouted", "/v1/elsewhere", "", 404),
-                                         ("unauthenticated", f"/v1/chats/{stub.CHAT_UID}/messages", "", 401),
-                                         ("authenticated but over 64 KiB", "/v1/ws/ticket", local.token, 413)):
+        for label, path, token, want in (("off-realm", "/v1/ws/ticket", local.token, 404),
+                                         ("unrouted", f"{local.realm}/v1/elsewhere", "", 404),
+                                         ("unauthenticated", f"{local.realm}/v1/chats/{stub.CHAT_UID}/messages", "", 401),
+                                         ("authenticated but over 64 KiB", f"{local.realm}/v1/ws/ticket", local.token, 413)):
             check_that(f"an {label} POST claiming a terabyte body is answered at once, and closed",
                        _huge_post(local.port, path, token), (want, True))
 
@@ -328,6 +359,15 @@ def _huge_post(port: int, path: str, token: str) -> tuple[int | None, bool]:
             return None, False
     status = received.split(b" ", 2)[1] if received.startswith(b"HTTP/") else None
     return (int(status) if status else None), True
+
+
+def _status(url: str) -> int | None:
+    """The status of a plain GET, whatever it is."""
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
 
 
 def _exit_within(process: subprocess.Popen, seconds: float) -> int | None:
