@@ -1,0 +1,30 @@
+{
+  "event_id": "evt_check",
+  "event_type": "message_received",
+  "created_at": "2026-09-14T12:00:00Z",
+  "chat_id": "cht_check",
+  "data": {
+    "type": "message_received",
+    "message": {
+      "uid": "msg_check",
+      "object": "message",
+      "chat_uid": "cht_check",
+      "direction": "inbound",
+      "body": "plow-agents image check: reply with anything.",
+      "mentions": null,
+      "effect": null,
+      "status": "received",
+      "sender": {
+        "type": "member",
+        "uid": "cpt_check",
+        "display_name": "Owner",
+        "relationship": null,
+        "role": "owner",
+        "provider_key": "+15555550101"
+      },
+      "reactions": [],
+      "attachments": [],
+      "created_at": "2026-09-14T12:00:00Z"
+    }
+  }
+}

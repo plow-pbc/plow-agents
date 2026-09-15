@@ -27,7 +27,7 @@ sys.path.insert(0, SRC)
 
 from plow_agents import api, cli, config, images  # noqa: E402
 
-IMAGE = "ghcr.io/plow-pbc/reference"
+IMAGE = "ghcr.io/you/plow-agents"
 SHA = "sha256:" + "ab" * 32
 FREE, HELD = "ln_free", "ln_held"
 
@@ -103,10 +103,10 @@ class Registry:
             if not self.public:
                 return httpx.Response(403, json={"errors": [{"code": "DENIED"}]})
             return httpx.Response(200, json={"token": "anonymous"})
-        if request.url.path == f"/v2/plow-pbc/reference/manifests/{SHA}" or request.url.path.startswith("/v2/plow-pbc/reference/manifests/"):
+        if request.url.path == f"/v2/you/plow-agents/manifests/{SHA}" or request.url.path.startswith("/v2/you/plow-agents/manifests/"):
             if request.headers.get("Authorization") != "Bearer anonymous":
                 return httpx.Response(401, headers={"WWW-Authenticate":
-                    f'Bearer realm="{self.realm}",service="ghcr.io",scope="repository:plow-pbc/reference:pull"'})
+                    f'Bearer realm="{self.realm}",service="ghcr.io",scope="repository:you/plow-agents:pull"'})
             if self.manifest_status != 200:
                 return httpx.Response(self.manifest_status)
             return httpx.Response(200, headers={"Content-Type": self.media}, content=b"{}")
@@ -175,15 +175,16 @@ def main() -> int:
         toml = os.path.join(work, config.CONFIG_FILE)
 
         # --- plow-agents.toml: the unit of identity -------------------------
-        code, _, _ = run("init", "--slug", "reference", "--image", IMAGE, cwd=work, base=base, token=token)
-        check("init writes plow-agents.toml", (code, os.path.isfile(toml)), (0, True))
-        check("toml read gives slug and image", (config.load(work).slug, config.load(work).image), ("reference", IMAGE))
+        code, _, _ = run("init", "--slug", "plow-agents", "--image", IMAGE, cwd=work, base=base, token=token)
+        check("init writes a repo, plow-agents.toml included",
+              (code, os.path.isfile(toml), os.path.isfile(os.path.join(work, "agent.py"))), (0, True, True))
+        check("toml read gives slug and image", (config.load(work).slug, config.load(work).image), ("plow-agents", IMAGE))
         check("toml has no digest before a push", config.load(work).last_pushed, "")
         check("--image overrides the toml without writing it",
               (config.load(work, image="ghcr.io/other/x").image, config.load(work).image), ("ghcr.io/other/x", IMAGE))
         check("--slug overrides the toml", config.load(work, slug="other").slug, "other")
         code, _, err = run("init", cwd=work, base=base, token=token)
-        check("init refuses to overwrite an existing toml", (code != 0, "already exists" in err), (True, True))
+        check("init refuses to write over an existing repo", (code != 0, "does not merge" in err), (True, True))
 
         missing = os.path.join(work, "elsewhere")
         os.makedirs(missing)
@@ -191,11 +192,11 @@ def main() -> int:
         check("a verb with no toml names the field it wanted", (code != 0, "no image in" in err), (True, True))
 
         # --- init ---------------------------------------------------------
-        code, _, err = run("init", "--slug", "a", "--image", "ghcr.io/a/b", "--directory", os.path.join(work, "both"),
+        code, _, err = run("init", "--slug", "a", "--image", "ghcr.io/a/b", os.path.join(work, "both"),
                            cwd=work, base=base, token=token)
         check("init with both fields given asks for nothing more", (code, "Set " in err), (0, False))
-        code, _, err = run("init", "--slug", "a", "--directory", os.path.join(work, "one"), cwd=work, base=base, token=token)
-        check("init names only the field it was not given", (code, "Set `image` before" in err), (0, True))
+        code, _, err = run("init", "--slug", "a", os.path.join(work, "one"), cwd=work, base=base, token=token)
+        check("init names only the field it was not given", (code, "Set `image` in plow-agents.toml" in err), (0, True))
 
         # --- image build ----------------------------------------------------
         docker = FakeDocker()
@@ -222,14 +223,14 @@ def main() -> int:
         check("push pushes the tag, and runs no other docker command", docker.argvs, [["docker", "push", f"{IMAGE}:latest"]])
         check("push asks the registry for the pushed digest, is challenged, takes the anonymous token, and asks again",
               [(request.method, request.url.path) for request in registry.requests],
-              [("GET", f"/v2/plow-pbc/reference/manifests/{SHA}"), ("GET", "/token"), ("GET", f"/v2/plow-pbc/reference/manifests/{SHA}")])
+              [("GET", f"/v2/you/plow-agents/manifests/{SHA}"), ("GET", "/token"), ("GET", f"/v2/you/plow-agents/manifests/{SHA}")])
         check("and the token request carries the challenge's scope and no credentials",
               (dict(registry.requests[1].url.params), "Authorization" in registry.requests[1].headers),
-              ({"service": "ghcr.io", "scope": "repository:plow-pbc/reference:pull"}, False))
+              ({"service": "ghcr.io", "scope": "repository:you/plow-agents:pull"}, False))
         check("push prints the digest-pinned reference", out.strip(), f"{IMAGE}@{SHA}")
         check("push records last_pushed in the toml", config.load(work).last_pushed, SHA)
         with open(toml) as handle:
-            check("and leaves the other keys alone", 'slug = "reference"' in handle.read(), True)
+            check("and leaves the other keys alone", 'slug = "plow-agents"' in handle.read(), True)
 
         other = "sha256:" + "ef" * 32
         for label, registry, words in (
@@ -248,15 +249,15 @@ def main() -> int:
             code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=FakeDocker(digest=other), registry=registry)
             check(f"push refuses {label}, naming it, and never asks it for a token",
                   (code != 0, realm in err, [r.url.path for r in registry.requests if r.url.path == "/token"]), (True, True, []))
-        code, out, _ = run("image", "push", "--image", "docker.io/plow-pbc/reference", cwd=work, base=base, token=token,
+        code, out, _ = run("image", "push", "--image", "docker.io/you/plow-agents", cwd=work, base=base, token=token,
                            docker=FakeDocker(digest=other), registry=Registry(realm="https://auth.docker.io/token"))
-        check("Docker Hub's token host is the one other realm followed", (code, out.strip()), (0, f"docker.io/plow-pbc/reference@{other}"))
+        check("Docker Hub's token host is the one other realm followed", (code, out.strip()), (0, f"docker.io/you/plow-agents@{other}"))
         for registry_host, realm in (("registry.example:5000", "https://registry.example:5000/token"),
                                      ("registry.example:443", "https://registry.example/token")):
-            code, out, _ = run("image", "push", "--image", f"{registry_host}/plow-pbc/reference", cwd=work, base=base, token=token,
+            code, out, _ = run("image", "push", "--image", f"{registry_host}/you/plow-agents", cwd=work, base=base, token=token,
                                docker=FakeDocker(digest=other), registry=Registry(realm=realm))
             check(f"{registry_host} takes a realm on the same host and port: {realm}",
-                  (code, out.strip()), (0, f"{registry_host}/plow-pbc/reference@{other}"))
+                  (code, out.strip()), (0, f"{registry_host}/you/plow-agents@{other}"))
 
         docker = FakeDocker(digest="not-a-digest")
         code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=docker, registry=Registry())
@@ -307,7 +308,7 @@ def main() -> int:
         code, out, err = run("deploy", cwd=work, base=base, token=token)
         check("deploy exits 0", code, 0)
         check("deploy sends the digest-pinned image as the provider", Stub.created[-1],
-              {"name": "reference", "line_uid": FREE, "provider": f"exe:{IMAGE}@{SHA}"})
+              {"name": "plow-agents", "line_uid": FREE, "provider": f"exe:{IMAGE}@{SHA}"})
         check("deploy prints the line and the reference it asked for", out.strip().split("\t"), ["agt_new", FREE, f"{IMAGE}@{SHA}"])
         check("deploy says requested, not deployed, and names the phase", ("Requested agent agt_new" in err, "provisioning" in err), (True, True))
         check("deploy does not claim the agent is up", "Deployed" in err, False)

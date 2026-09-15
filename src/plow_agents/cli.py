@@ -20,7 +20,8 @@ from typing import Annotated
 
 import typer
 
-from . import config, images
+from . import check as contract
+from . import config, images, template
 from .api import (
     CREDENTIAL_FILE,
     DEFAULT_API_BASE,
@@ -321,17 +322,20 @@ def revoke(
 def init(
     slug: Annotated[str, typer.Option("--slug", help="the listing slug this repo claims")] = "",
     image: Annotated[str, typer.Option("--image", help="the public image reference to push to, without a tag")] = "",
-    directory: Annotated[str, typer.Option("--directory", help="where to write it")] = ".",
+    directory: Annotated[str, typer.Argument(help="where to write the repo")] = ".",
 ) -> None:
-    """Write plow-agents.toml, the one file that says which agent this repo is."""
-    path = os.path.abspath(os.path.join(directory, config.CONFIG_FILE))
-    if os.path.exists(path):
-        die(f"{path} already exists -- edit it, or pass --directory")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as handle:
-        handle.write(f'slug = "{slug}"\nimage = "{image}"\n')
+    """Write a working agent repo: a reference agent, a Dockerfile, an Action, plow-agents.toml."""
+    destination = os.path.abspath(directory)
+    try:
+        written = template.copy_into(destination, slug=slug, image=image)
+    except FileExistsError as error:
+        die(f"{error.filename} already exists -- init writes a new repo, it does not merge")
+    for path in written:
+        log(f"  {os.path.relpath(path, destination)}")
+    log(f"\nWrote {len(written)} files into {destination}.")
     missing = [f"`{field}`" for field, value in (("slug", slug), ("image", image)) if not value]
-    log(f"Wrote {path}." + (f" Set {' and '.join(missing)} before `plow-agents image push`." if missing else ""))
+    log(f"Set {' and '.join(missing)} in plow-agents.toml, then `plow-agents image build`." if missing
+        else "Next: `plow-agents image build`.")
 
 
 @image_app.command("build")
@@ -347,6 +351,31 @@ def image_build(
     this = state(ctx)
     reference = images.build(this.docker, image=config.load(image=image).need_image(), tag=tag, context=context)
     log(f"Built {reference}.")
+
+
+@image_app.command("check")
+def image_check(
+    ctx: typer.Context,
+    image: Annotated[str | None, typer.Option("--image", help="override the image in plow-agents.toml")] = None,
+    tag: Annotated[str, typer.Option("--tag", help="the tag to check; the one `image build` wrote")] = images.DEFAULT_TAG,
+    timeout: Annotated[float, typer.Option("--timeout", help="seconds to allow the agent to boot and answer")] = contract.BOOT_TIMEOUT_S,
+) -> None:
+    """Run the built image the way exe.dev would: fail on the contract, warn on the advice."""
+    this = state(ctx)
+    settings = config.load(image=image)
+    reference = f"{settings.need_image()}:{tag}"
+    log(f"Checking {reference} against the cloud-agent contract.")
+    try:
+        passed, warned = contract.check(this.docker, image=reference, timeout=timeout)
+    except contract.ContractError as failure:
+        # The first failing assertion and nothing after it: a container that
+        # never reached the API has nothing to say about whether it would
+        # have answered a message.
+        log("")
+        die(f"{reference} does not satisfy the contract.\n  FAILED: {failure.assertion}\n  saw:    {failure.saw}")
+    log("")
+    advice = f", with {len(warned)} warning{'s' if len(warned) != 1 else ''} above" if warned else ""
+    print(f"{reference} satisfies the contract ({len(passed)} assertions){advice}.")
 
 
 @image_app.command("push")
