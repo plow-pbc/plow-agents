@@ -34,6 +34,7 @@ FREE, HELD = "ln_free", "ln_held"
 
 class Stub(BaseHTTPRequestHandler):
     created: list[dict] = []
+    retired: list[str] = []
     lines = {"data": [{"uid": FREE, "display_name": "Free", "provider_key": "+15550001", "agent_uid": None},
                       {"uid": HELD, "display_name": "Held", "provider_key": "+15550002", "agent_uid": "agt_held"}]}
     chats = {"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": uid}}]}
@@ -60,6 +61,8 @@ class Stub(BaseHTTPRequestHandler):
             return self._send(200, Stub.lines)
         if self.path == "/v1/agents":
             return self._send(200, Stub.agents)
+        if self.path.startswith("/v1/agents/"):
+            return self._send(200, {"uid": self.path.rsplit("/", 1)[-1], "provider": "self_hosted"})
         self._send(404, {"detail": self.path})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -72,6 +75,10 @@ class Stub(BaseHTTPRequestHandler):
             agent = {"uid": "agt_new", "provider": body["provider"], "line": {"uid": body["line_uid"]}, "status": "provisioning"}
             return self._send(201, {"agent": agent, "token": "plow_minted" if body["provider"] == "self_hosted" else None})
         self._send(404, {"detail": self.path})
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        Stub.retired.append(self.path.rsplit("/", 1)[-1])
+        self._send(200, {})
 
     def log_message(self, *_: object) -> None:
         pass
@@ -386,6 +393,19 @@ def main() -> int:
               (code != 0, "build failed" in err, Stub.created, os.path.exists(os.path.join(failing, "plow-credentials"))),
               (True, True, [], False))
         check("and it never reached compose up", docker.argvs, [["docker", "compose", "build"]])
+
+        failing_up = os.path.join(work, "failing-up")
+        os.makedirs(failing_up)
+        with open(os.path.join(failing_up, "compose.yml"), "w") as handle:
+            handle.write("services: {}\n")
+        docker = FakeDocker(fail="up")
+        Stub.created.clear()
+        Stub.retired.clear()
+        code, _, err = run("deploy", "--local", "--line", FREE, cwd=failing_up, base=base, token=token, docker=docker)
+        check("a compose up that fails retires the agent it just minted, and takes the credential with it",
+              (code != 0, Stub.created and Stub.created[-1]["provider"], Stub.retired,
+               os.path.exists(os.path.join(failing_up, "plow-credentials"))),
+              (True, "self_hosted", ["agt_new"], False))
 
         # --- agents ---------------------------------------------------------
         code, out, _ = run("agents", cwd=work, base=base, token=token)
