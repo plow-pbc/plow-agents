@@ -12,8 +12,8 @@ On exe.dev the token is not set: PLOW_API_BASE is a proxy that adds it to every
 request, so it never reaches the VM. It is set for local runs, where there is
 no proxy, and then it goes on every request as a bearer.
 
-Replace `compose_reply` with your agent. Everything above it is the contract
-and wants no edits; everything below it is yours.
+Replace only `compose_reply`; keep the code under the contract heading below,
+which is the transport this agent needs to reach Plow at all.
 """
 
 from __future__ import annotations

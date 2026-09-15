@@ -30,8 +30,8 @@ repository you push to, with no tag.
 
 ## Step 2 — Make it yours
 
-`agent.py` is the whole agent. Everything under **your agent** is yours;
-everything under **the contract** is what Plow requires and wants no edits.
+`agent.py` is the whole agent. Replace only `compose_reply`, under **your
+agent**; keep the code under **the contract**, which is how it reaches Plow.
 
 ```python
 def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
@@ -39,7 +39,7 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 ```
 
 Call a model, read a database, do nothing at all — the contract does not care,
-as long as the code above `compose_reply` keeps talking to Plow.
+as long as the code under **the contract** is still there to carry it.
 
 It is a starter, not a production agent: it does not deduplicate events or catch up on messages
 sent while its socket was down.
@@ -52,10 +52,11 @@ plow-agents image check
 ```
 
 `image check` runs the image the way exe.dev will: the CMD as PID 1, with
-`PLOW_API_BASE` pointing at a stub Plow on this machine and a fake
-`PLOW_AGENT_TOKEN`. It fails only on [the contract](#the-contract), and warns
-when the agent skips the identity call, the WebSocket or a reply. Passing it is
-what makes a deploy worth trying.
+`PLOW_API_BASE` pointing at a stub Plow on this machine and **no**
+`PLOW_AGENT_TOKEN`, because a VM gets none. An image that requires the token
+fails here, as it would on exe.dev. It fails only on
+[the contract](#the-contract), and warns when the agent skips the identity
+call, the WebSocket or a reply. Passing it is what makes a deploy worth trying.
 
 ## Step 4 — Publish and deploy
 
@@ -92,14 +93,8 @@ on a `v*` tag. It logs in to ghcr.io only; for any other registry, run `image pu
 
 ## The contract
 
-Three lines, and the only things that fail `image check`:
-
-- Your image's `CMD` is PID 1.
-- Your agent reads `PLOW_API_BASE` (no `/v1`) from its environment and talks to it.
-- If `PLOW_AGENT_TOKEN` is set, send it as a bearer.
-
-`AGENT_ID`, the listing slug, is set only when the agent was deployed from a
-listing. Don't require it.
-
-The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything under
-**Sharp edges** is advice.
+`image check` validates Plow's authoritative
+[cloud-agent image contract](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md).
+It boots this image with `PLOW_API_BASE` and nothing else, and fails it if the
+CMD is not PID 1 or nothing inside calls the API. Everything under
+**Sharp edges** is advice it only warns about.

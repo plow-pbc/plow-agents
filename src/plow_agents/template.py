@@ -7,7 +7,6 @@ The files live beside this module as `template/` and ship in the wheel, so
 from __future__ import annotations
 
 import os
-import shutil
 from importlib import resources
 
 from .api import die
@@ -28,15 +27,18 @@ def copy_into(destination: str, *, slug: str = "", image: str = "") -> list[str]
     escaping = [name for name, target in targets.items() if not os.path.realpath(target).startswith(root + os.sep)]
     if escaping:
         die(f"{os.path.join(destination, escaping[0])} resolves outside {destination} -- init does not write through a symlink")
-    existing = [name for name, target in targets.items() if os.path.lexists(target)]
-    if existing:
-        die(f"{destination} already has {', '.join(existing[:3])} -- init writes a new repo, it does not merge")
     written = []
     for name, target in targets.items():
+        body = _read(os.path.join(str(source), name))
+        if name == "plow-agents.toml":
+            body = _filled(body, slug=slug, image=image)
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copyfile(os.path.join(str(source), name), target)
+        # `xb`, so the only thing standing between a file and this write is the
+        # kernel: a scan first and a write after is a window in which an editor,
+        # a checkout or a second `init` can put a file there to be truncated.
+        with open(target, "xb") as handle:
+            handle.write(body)
         written.append(os.path.join(destination, name))
-    _fill(targets["plow-agents.toml"], slug=slug, image=image)
     return written
 
 
@@ -51,9 +53,11 @@ def _walk(root: str) -> list[str]:
     return found
 
 
-def _fill(path: str, *, slug: str, image: str) -> None:
-    with open(path) as handle:
-        body = handle.read()
-    body = body.replace('slug = ""', f'slug = "{slug}"').replace('image = ""', f'image = "{image}"')
-    with open(path, "w") as handle:
-        handle.write(body)
+def _read(path: str) -> bytes:
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def _filled(body: bytes, *, slug: str, image: str) -> bytes:
+    """The toml with its two fields substituted, before anything is written."""
+    return body.replace(b'slug = ""', f'slug = "{slug}"'.encode()).replace(b'image = ""', f'image = "{image}"'.encode())

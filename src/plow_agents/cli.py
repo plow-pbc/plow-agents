@@ -326,7 +326,10 @@ def init(
 ) -> None:
     """Write a working agent repo: a reference agent, a Dockerfile, an Action, plow-agents.toml."""
     destination = os.path.abspath(directory)
-    written = template.copy_into(destination, slug=slug, image=image)
+    try:
+        written = template.copy_into(destination, slug=slug, image=image)
+    except FileExistsError as error:
+        die(f"{error.filename} already exists -- init writes a new repo, it does not merge")
     for path in written:
         log(f"  {os.path.relpath(path, destination)}")
     log(f"\nWrote {len(written)} files into {destination}.")

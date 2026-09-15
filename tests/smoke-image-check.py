@@ -36,11 +36,11 @@ from plow_agents import check, stub, template  # noqa: E402
 TEMPLATE = os.path.join(SRC, "plow_agents", "template")
 CONTAINER = "c0ffee"
 COMPLIANT = {"Cmd": ["python3", "/opt/agent/agent.py"]}
-CONTRACT = ["the image has a CMD to run as PID 1", check.TOKEN_ASSERTION]
+CONTRACT = ["the image has a CMD to run as PID 1", check.CALL_ASSERTION]
 
-def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
+def call(method: str, url: str, body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    headers = {"Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -48,22 +48,22 @@ def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
         return json.loads(response.read() or b"null")
 
 
-def fake_agent(base: str, token: str, *, skip: str | None, stopping: threading.Event) -> None:
+def fake_agent(base: str, *, skip: str | None, stopping: threading.Event) -> None:
     """A compliant agent with one step removable: the contract's to fail the check, the advice's to warn."""
     try:
         if skip == "anything":
             return
         if skip != "me":
-            call("GET", f"{base}/v1/agents/cloud/me", "wrong-token" if skip == "token" else token)
-        if skip in ("token", "websocket"):
+            call("GET", f"{base}/v1/agents/cloud/me")
+        if skip == "websocket":
             return
-        ticket = call("POST", f"{base}/v1/ws/ticket", token, {})["ticket"]
+        ticket = call("POST", f"{base}/v1/ws/ticket", {})["ticket"]
         with connect(f"{base.replace('http', 'ws', 1)}/v1/ws?ticket={ticket}") as socket:
             while not stopping.is_set():
                 frame = json.loads(socket.recv(timeout=10))
                 if frame.get("event_type") != "message_received" or skip == "reply":
                     continue
-                call("POST", f"{base}/v1/chats/{frame['chat_id']}/messages", token, {"body": "ack"})
+                call("POST", f"{base}/v1/chats/{frame['chat_id']}/messages", {"body": "ack"})
                 stopping.wait()
     except Exception as error:  # noqa: BLE001 -- a fake agent that dies is a failing check
         print(f"    (fake agent stopped: {type(error).__name__}: {error})")
@@ -87,7 +87,7 @@ class FakeDocker:
         # container, done to the value: this process reaches the stub on loopback.
         base = self.environment["PLOW_API_BASE"].replace("host.docker.internal", "127.0.0.1")
         if not self.real:
-            threading.Thread(target=fake_agent, args=(base, self.environment["PLOW_AGENT_TOKEN"]),
+            threading.Thread(target=fake_agent, args=(base,),
                              kwargs={"skip": self.skip, "stopping": self.stopping}, daemon=True).start()
             return
         clean = {key: value for key, value in os.environ.items() if not key.startswith(("PLOW_", "AGENT_ID"))}
@@ -140,10 +140,10 @@ def main() -> int:
     if failed:
         print(docker.agent_log())
     check_that("and makes exactly the contract's two assertions", passed, CONTRACT)
-    check_that("with no warning, having replied to the owner", (warned, "warn" in output, "it said: Hi Owner" in output),
-               ([], False, True))
-    check_that("the container gets the contract's environment -- no AGENT_ID, which the agent must not need",
-               sorted(docker.environment), ["PLOW_AGENT_TOKEN", "PLOW_API_BASE"])
+    check_that("with no warning, having replied to the owner in quoted bytes",
+               (warned, "warn" in output, "it said: 'Hi Owner" in output), ([], False, True))
+    check_that("the container gets what a VM gets: PLOW_API_BASE alone, no token and no AGENT_ID",
+               sorted(docker.environment), ["PLOW_API_BASE"])
     check_that("and names the stub by the host a container reaches this machine on",
                docker.environment.get("PLOW_API_BASE", "").startswith("http://host.docker.internal:"), True)
     check_that("it is started with no command override",
@@ -155,7 +155,6 @@ def main() -> int:
     for label, docker, assertion, saw in (
         ("no CMD", FakeDocker(config={"Cmd": []}), CONTRACT[0], "neither Cmd nor Entrypoint is set"),
         ("an agent that calls nothing", FakeDocker(skip="anything"), CONTRACT[1], "no request reached the API"),
-        ("the wrong token", FakeDocker(skip="token"), CONTRACT[1], "requests arrived without it"),
     ):
         passed, warned, failed, _ = run_check(docker)
         check_that(f"check fails on {label}, naming that assertion", failed and failed.assertion, assertion)
@@ -185,14 +184,11 @@ def main() -> int:
         code = _exit_within(agent, 10)
         check_that("a 401 on the ticket is raised, not retried forever", code not in (None, 0), True)
         check_that("and it asked once", plow.tickets, 1)
-    with Plow("hang") as plow:
-        agent = plow.boot(token=None)
-        plow.ticket_asked.wait(10)
-        check_that("with no PLOW_AGENT_TOKEN it sends no Authorization -- the proxy adds it", plow.authorizations[:1], [None])
-    with Plow("hang") as plow:
-        agent = plow.boot(token="t")
-        plow.ticket_asked.wait(10)
-        check_that("with one, it sends it as a bearer", plow.authorizations[:1], ["Bearer t"])
+    for token, want in ((None, None), ("t", "Bearer t")):
+        with Plow("hang") as plow:
+            plow.boot(token=token)
+            plow.ticket_asked.wait(10)
+            check_that(f"PLOW_AGENT_TOKEN={token!r} sends Authorization {want!r}", plow.authorizations[:1], [want])
 
     # --- init copies the template -------------------------------------------
     with tempfile.TemporaryDirectory() as work:
@@ -208,10 +204,11 @@ def main() -> int:
                    ('slug = "plow-agents"' in toml, 'image = "ghcr.io/you/plow-agents"' in toml), (True, True))
         try:
             template.copy_into(repo)
-            refused = False
-        except SystemExit:
-            refused = True
-        check_that("and refuses to write over an existing repo", refused, True)
+            refused = ""
+        except FileExistsError as error:
+            refused = error.filename or ""
+        check_that("and refuses to write over an existing repo, naming the file",
+                   os.path.basename(refused) in shipped, True)
 
     # A checkout's symlinks -- a linked parent, a dangling link where a file goes -- are not written through.
     with tempfile.TemporaryDirectory() as work:
@@ -251,7 +248,7 @@ def main() -> int:
     check_that("and needs nothing else", agent["read_environment"]({"PLOW_API_BASE": "http://x/"}), ("http://x", None))
 
     # --- the stub reads no body before the route and the token say whose ----
-    with stub.Stub(host="127.0.0.1") as local:
+    with stub.Stub(host="127.0.0.1", token="plow_x") as local:
         for label, path, token, want in (("unrouted", "/v1/elsewhere", "", 404),
                                          ("unauthenticated", f"/v1/chats/{stub.CHAT_UID}/messages", "", 401),
                                          ("authenticated but over 64 KiB", "/v1/ws/ticket", local.token, 413)):

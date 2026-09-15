@@ -8,21 +8,12 @@ Do the steps yourself, or hand this page to an AI coding agent and let it do mos
 
 ## The contract
 
-A cloud image has three obligations:
+`image check` validates Plow's authoritative
+[cloud-agent image contract](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md).
 
-- Your image's `CMD` is PID 1.
-- Your agent reads `PLOW_API_BASE` (no `/v1`) from its environment and talks to it.
-- If `PLOW_AGENT_TOKEN` is set, send it as a bearer.
-
-That is the whole of it. The environment is the interface: Plow writes nothing inside the VM. On
-exe.dev, `PLOW_API_BASE` is a proxy that adds the agent's token to every request, so the token
-never reaches the VM and `PLOW_AGENT_TOKEN` is not set there; it is set for local runs, where there
-is no proxy. `AGENT_ID`, the listing slug, is set only when the agent was deployed from a listing.
-Don't require it.
-
-The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything else on this
-page — listen on no port, ask `GET /v1/agents/cloud/me` on every boot, exit on SIGTERM — is
-advice.
+Locally it boots your image with `PLOW_API_BASE` pointing at a stub Plow and nothing else — the
+shape a VM gets — and fails it if the CMD is not PID 1 or nothing inside calls the API. Everything
+else it prints is a warning.
 
 ## What you need
 
@@ -120,10 +111,11 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
     """What to say back, or None to stay quiet. This is the part you replace."""
 ```
 
-Everything above it keeps [the contract](#the-contract) and follows the advice: read
-`PLOW_API_BASE` and, if set, `PLOW_AGENT_TOKEN` from the environment, call
-`GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot, open the chat WebSocket, answer, and exit
-on SIGTERM. Any image that keeps the contract works — the reference agent is one, not the one.
+Replace only `compose_reply`; keep the code under agent.py's contract heading, which is how it
+reaches Plow — it reads `PLOW_API_BASE` and, if set, `PLOW_AGENT_TOKEN` from the environment,
+calls `GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot, opens the chat WebSocket, answers,
+and exits on SIGTERM. Any image that keeps [the contract](#the-contract) works — the reference
+agent is one, not the one.
 
 ## Step 4 — Build the image
 
@@ -142,12 +134,13 @@ plow-agents image check
 ```
 
 This is the step that saves a failed deploy. It runs your built image the way exe.dev will —
-no command override, `PLOW_API_BASE` pointing at a stub Plow on this machine, and a fake
-`PLOW_AGENT_TOKEN`. Two things fail it, and they are the contract's:
+no command override, `PLOW_API_BASE` pointing at a stub Plow on this machine, and no
+`PLOW_AGENT_TOKEN`, because a VM gets none. An image that requires the token fails here, exactly
+as it would on exe.dev. Two things fail it, and they are the contract's:
 
 ```
   ok   the image has a CMD to run as PID 1
-  ok   something inside calls the Plow API with PLOW_AGENT_TOKEN
+  ok   something inside calls the Plow API
 ```
 
 Then the advice, each line `ok` or `warn`. A warning never fails the check:
@@ -162,7 +155,7 @@ A failure names the assertion and what was seen instead:
 
 ```
 plow-agents: ghcr.io/you/plow-agents:latest does not satisfy the contract.
-  FAILED: something inside calls the Plow API with PLOW_AGENT_TOKEN
+  FAILED: something inside calls the Plow API
   saw:    no request reached the API
 ```
 

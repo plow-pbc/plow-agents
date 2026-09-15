@@ -102,11 +102,14 @@ class _Handler(BaseHTTPRequestHandler):
         return self.server.stub  # type: ignore[attr-defined]
 
     def _note_token(self) -> None:
-        if self.headers.get("Authorization") == f"Bearer {self.stub.token}":
+        # No token of its own is the exe.dev shape: the integration in front of
+        # the API adds the bearer, so whatever arrives here already carries the
+        # agent's authority and the call itself is the evidence.
+        if self.stub.token is None or self.headers.get("Authorization") == f"Bearer {self.stub.token}":
             self.stub.seen.token.set()
 
     def _authorized(self) -> bool:
-        if self.headers.get("Authorization") == f"Bearer {self.stub.token}":
+        if self.stub.token is None or self.headers.get("Authorization") == f"Bearer {self.stub.token}":
             return True
         self.stub.seen.bad_auth.append(f"{self.command} {self.path}")
         self._json(401, {"detail": "not this agent's token"}, close=True)
@@ -200,8 +203,8 @@ class _Handler(BaseHTTPRequestHandler):
 class Stub:
     """The stub, its synthetic token, and what the agent did with it."""
 
-    def __init__(self, *, host: str = "0.0.0.0") -> None:  # noqa: S104 -- the container has to reach it
-        self.token = "plow_check_" + os.urandom(16).hex()
+    def __init__(self, *, host: str = "0.0.0.0", token: str | None = None) -> None:  # noqa: S104 -- the container has to reach it
+        self.token = token
         self.ticket = "tkt_" + os.urandom(16).hex()
         self.seen = Recorder()
         self._server = ThreadingHTTPServer((host, 0), _Handler)
@@ -218,10 +221,15 @@ class Stub:
         self._server.server_close()
 
     def environment(self, host: str) -> dict[str, str]:
-        """What the container is given, reaching the stub by `host`. No `AGENT_ID`:
-        that is only set for a listing deploy, so an agent that needs it would
-        fail on every deploy that is not one, and this is where it should find out."""
-        return {"PLOW_API_BASE": f"http://{host}:{self.port}", "PLOW_AGENT_TOKEN": self.token}
+        """What the container is given, reaching the stub by `host`.
+
+        `PLOW_API_BASE` alone, which is what a VM gets: exe.dev's integration
+        adds the bearer on the way through, so neither `PLOW_AGENT_TOKEN` nor
+        `AGENT_ID` is set there. An image that requires either would fail on
+        every bare-image deploy, and this is where it should find that out.
+        """
+        environment = {"PLOW_API_BASE": f"http://{host}:{self.port}"}
+        return environment if self.token is None else {**environment, "PLOW_AGENT_TOKEN": self.token}
 
     def identity(self) -> dict:
         """`GET /v1/agents/cloud/me`: one line, one chat, no Mac, a signup phrase."""

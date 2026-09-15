@@ -1,11 +1,13 @@
 """Run a built image the way exe.dev would, and check it against the contract.
 
-The contract is three lines, stated in `api/cloud-agents/README.md`: the
-image's CMD is PID 1, the agent reads PLOW_API_BASE from its environment and
-talks to it, and it sends PLOW_AGENT_TOKEN as a bearer when that is set. So two
-things fail this check -- the image has a CMD to start, and something inside
-calls the stub with the token it was given. The identity call, the WebSocket
-and a reply are printed as warnings, and never fail it.
+The contract is stated in `api/cloud-agents/README.md`. Two things fail this
+check: the image has a CMD to start, and something inside calls the stub.
+
+The container is booted the way a VM is -- `PLOW_API_BASE` and nothing else.
+On exe.dev an integration in front of the API adds the agent's bearer, so
+`PLOW_AGENT_TOKEN` is not set there, and an image that requires it fails here
+exactly as it would on a real deploy. The identity call, the WebSocket and a
+reply are printed as warnings, and never fail it.
 
 Nothing here knows about Hermes. An image passes because it satisfies the
 contract, not because of what it is built from.
@@ -25,7 +27,7 @@ BOOT_TIMEOUT_S = 90
 # Once the token has been used, how long the agent gets to open the socket and
 # answer before the advice is judged on what it has done so far.
 ADVICE_WAIT_S = 15
-TOKEN_ASSERTION = "something inside calls the Plow API with PLOW_AGENT_TOKEN"
+CALL_ASSERTION = "something inside calls the Plow API"
 
 
 class ContractError(Exception):
@@ -63,9 +65,8 @@ def check(runner: Runner, *, image: str, timeout: float = BOOT_TIMEOUT_S,
         try:
             seen = stub.seen
             if not seen.token.wait(timeout):
-                raise ContractError(TOKEN_ASSERTION, f"requests arrived without it: {', '.join(seen.bad_auth[:3])}"
-                                    if seen.bad_auth else "no request reached the API")
-            ok(TOKEN_ASSERTION)
+                raise ContractError(CALL_ASSERTION, "no request reached the API")
+            ok(CALL_ASSERTION)
 
             seen.replied.wait(advice_wait)
             advise("it calls GET /v1/agents/cloud/me on boot", None if "identity" in seen.events
@@ -76,7 +77,9 @@ def check(runner: Runner, *, image: str, timeout: float = BOOT_TIMEOUT_S,
             advise("it replies to a message", None if seen.reply
                    else "it posted an empty body" if seen.replied.is_set() else "nothing was posted back")
             if seen.reply:
-                log(f"       it said: {seen.reply[:120]}")
+                # Quoted: the image chose these bytes, and an escape sequence
+                # printed raw is the image driving the operator's terminal.
+                log(f"       it said: {seen.reply[:120]!r}")
         finally:
             runner(["docker", "rm", "--force", container], {})
     return passed, warned
