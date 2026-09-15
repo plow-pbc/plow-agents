@@ -41,6 +41,9 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 Call a model, read a database, do nothing at all — the contract does not care,
 as long as the code above `compose_reply` keeps talking to Plow.
 
+It is a starter, not a production agent: it does not deduplicate events or catch up on messages
+sent while its socket was down.
+
 ## Step 3 — Build and check it
 
 ```sh
@@ -69,7 +72,7 @@ registry login and the visibility switch, is in the
 [plow-agents README](https://github.com/plow-pbc/plow-agents#readme).
 
 `.github/workflows/publish.yml` runs `image build`, `image check` and `image push`
-on a `v*` tag.
+on a `v*` tag. It logs in to ghcr.io only; for any other registry, run `image push` locally.
 
 ## Sharp edges
 

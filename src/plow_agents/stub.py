@@ -37,7 +37,6 @@ MEMBER_UID = "cpt_check"
 # One account-socket `ChatEvent`, as the Plow API serializes it: the envelope
 # with its `data`, because an agent's ticket names no chat.
 MESSAGE_RECEIVED = json.loads(resources.files(__package__).joinpath("message_received.json").read_text())
-PROMPT = MESSAGE_RECEIVED["data"]["message"]["body"]
 
 
 class Recorder:

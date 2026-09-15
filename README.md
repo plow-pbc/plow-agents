@@ -105,7 +105,8 @@ image = "ghcr.io/you/plow-agents"
 `image` is a repository with no tag. Every `image` verb reads this file from the working
 directory; `--slug` and `--image` override it for one run without writing to it.
 
-`init` refuses to write over an existing repo — it starts one, it does not merge into one.
+`init` writes into an empty directory or an existing checkout, and refuses to overwrite any file
+it would write.
 
 ## Step 3 — Make it yours
 

@@ -207,12 +207,12 @@ def main() -> int:
     if failed:
         print(docker.agent_log())
     check_that("and makes exactly the contract's two assertions", passed, CONTRACT)
-    check_that("with no warning", (warned, "warn" in output), ([], False))
+    check_that("with no warning, having replied to the owner", (warned, "warn" in output, "it said: Hi Owner" in output),
+               ([], False, True))
     agent_log = docker.agent_log()
     check_that("the agent drops groups, then gid, then uid, before it says anything",
                [line for line in agent_log.splitlines() if line.startswith(("seam:", "INFO starting"))][:4],
                ["seam: setgroups []", "seam: setgid 10000", "seam: setuid 10000", "INFO starting as uid 10000"])
-    check_that("it reads the stub's schema-shaped frame and answers that chat", "INFO replied in cht_check" in agent_log, True)
     check_that("and the SIGTERM really ended its process, with 0", docker.process and docker.process.returncode, 0)
     check_that("the credential is a direct deploy's: no AGENT_ID, which the agent must not need",
                sorted(line.split("=")[0] for line in docker.credentials.splitlines()), ["PLOW_AGENT_TOKEN", "PLOW_API_BASE"])
