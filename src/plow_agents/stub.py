@@ -198,7 +198,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class Stub:
-    """The stub, its synthetic credential, and what the agent did with it."""
+    """The stub, its synthetic token, and what the agent did with it."""
 
     def __init__(self, *, host: str = "0.0.0.0") -> None:  # noqa: S104 -- the container has to reach it
         self.token = "plow_check_" + os.urandom(16).hex()
@@ -217,15 +217,11 @@ class Stub:
         self._server.shutdown()
         self._server.server_close()
 
-    def base_for(self, host: str) -> str:
-        """The `PLOW_API_BASE` to write into the credential, from where it is read."""
-        return f"http://{host}:{self.port}"
-
-    def credentials(self, host: str) -> str:
-        """The file Plow writes for a direct deploy. No `AGENT_ID`: that is only
-        written for a listing deploy, so an agent that needs it would fail on
-        every deploy that is not one, and this is where it should find out."""
-        return f"PLOW_API_BASE={self.base_for(host)}\nPLOW_AGENT_TOKEN={self.token}\n"
+    def environment(self, host: str) -> dict[str, str]:
+        """What the container is given, reaching the stub by `host`. No `AGENT_ID`:
+        that is only set for a listing deploy, so an agent that needs it would
+        fail on every deploy that is not one, and this is where it should find out."""
+        return {"PLOW_API_BASE": f"http://{host}:{self.port}", "PLOW_AGENT_TOKEN": self.token}
 
     def identity(self) -> dict:
         """`GET /v1/agents/cloud/me`: one line, one chat, no Mac, a signup phrase."""

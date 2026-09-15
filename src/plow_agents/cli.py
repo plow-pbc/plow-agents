@@ -366,7 +366,7 @@ def image_check(
         passed, warned = contract.check(this.docker, image=reference, timeout=timeout)
     except contract.ContractError as failure:
         # The first failing assertion and nothing after it: a container that
-        # never read its credential has nothing to say about whether it would
+        # never reached the API has nothing to say about whether it would
         # have answered a message.
         log("")
         die(f"{reference} does not satisfy the contract.\n  FAILED: {failure.assertion}\n  saw:    {failure.saw}")

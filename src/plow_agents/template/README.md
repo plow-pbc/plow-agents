@@ -51,10 +51,11 @@ plow-agents image build
 plow-agents image check
 ```
 
-`image check` runs the image the way exe.dev will: the CMD as PID 1, a
-credentials file dropped in as root, a stub Plow on this machine. It fails only
-on [the contract](#the-contract) and prints everything under **Sharp edges** as
-warnings. Passing it is what makes a deploy worth trying.
+`image check` runs the image the way exe.dev will: the CMD as PID 1, with
+`PLOW_API_BASE` pointing at a stub Plow on this machine and a fake
+`PLOW_AGENT_TOKEN`. It fails only on [the contract](#the-contract), and warns
+when the agent skips the identity call, the WebSocket or a reply. Passing it is
+what makes a deploy worth trying.
 
 ## Step 4 — Publish and deploy
 
@@ -76,18 +77,16 @@ on a `v*` tag. It logs in to ghcr.io only; for any other registry, run `image pu
 
 ## Sharp edges
 
-- **The credentials file is root-owned `0600`, so PID 1 starts as root.** That
-  is why the Dockerfile has no `USER` line: an image that declares `USER 10000`
-  cannot read its own credential. `agent.py` reads it and then drops to uid
-  10000 before touching the network, and `image check` warns about any process
-  other than PID 1 running as anything but 10000.
+- **Read the environment at run time.** On exe.dev `PLOW_API_BASE` is a proxy
+  that adds your token, so `PLOW_AGENT_TOKEN` is not set there. Build every URL
+  from `PLOW_API_BASE`, and send the token only when it is set.
 - **Ask `/v1/agents/cloud/me` at boot, every boot.** An agent can be moved to
   another line without anything on the VM changing; that call is how you find
   out.
 - **No inbound ports.** Nothing dials in. The chat surface is an outbound
   WebSocket.
-- **Exit on SIGTERM.** `docker stop` is how the VM goes away. `image check`
-  warns about an image that has to be killed.
+- **Exit on SIGTERM.** It is the only notice you get before the VM is
+  restarted or destroyed.
 - **Nothing is baked in.** No tenant, no token, no per-user state — that is
   what lets the image be public and lets Plow pull it with no credential.
 
@@ -96,10 +95,11 @@ on a `v*` tag. It logs in to ghcr.io only; for any other registry, run `image pu
 Three lines, and the only things that fail `image check`:
 
 - Your image's `CMD` is PID 1.
-- Plow writes one file, `/var/lib/plow/credentials`, with `PLOW_API_BASE` (no `/v1`) and
-  `PLOW_AGENT_TOKEN` — plus `AGENT_ID`, the listing slug, only when the agent was deployed from a
-  listing. Don't require it.
-- Your agent uses them to talk to the Plow API.
+- Your agent reads `PLOW_API_BASE` (no `/v1`) from its environment and talks to it.
+- If `PLOW_AGENT_TOKEN` is set, send it as a bearer.
+
+`AGENT_ID`, the listing slug, is set only when the agent was deployed from a
+listing. Don't require it.
 
 The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything under
 **Sharp edges** is advice.

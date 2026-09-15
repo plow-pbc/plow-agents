@@ -2,16 +2,12 @@
 """`image check` and `init`, against a fake docker and a real stub server.
 
 No docker daemon and no network beyond loopback. The fake runner answers the
-`docker` argv the CLI would run. On `docker start` it runs the **real template
-`agent.py`** as a process of its own, reading the credential the CLI actually
-wrote and talking to the real stub over a real WebSocket; `docker kill` sends
-that process a real SIGTERM. The one seam is privilege: a test cannot become
-root and drop to uid 10000, so `setgroups`/`setgid`/`setuid` are recorded
-rather than performed.
+`docker` argv the CLI would run. On `docker run` it runs the **real template
+`agent.py`** as a process of its own, with the environment the CLI actually
+passed, talking to the real stub over a real WebSocket.
 
 The ways to fail the contract are a smaller scripted agent in a thread, since
-the reference agent cannot be made to break it; `top`, `exec` and `inspect`
-answers are scripted too.
+the reference agent cannot be made to break it.
 
     python3 tests/smoke-image-check.py
 """
@@ -39,25 +35,8 @@ from plow_agents import check, stub, template  # noqa: E402
 
 TEMPLATE = os.path.join(SRC, "plow_agents", "template")
 CONTAINER = "c0ffee"
-INIT_PID = "4242"
 COMPLIANT = {"Cmd": ["python3", "/opt/agent/agent.py"]}
 CONTRACT = ["the image has a CMD to run as PID 1", check.TOKEN_ASSERTION]
-
-# Stands in for the kernel on the three calls a non-root test process cannot
-# make, and prints each so the order of the drop can be read back.
-PRIVILEGE_SEAM = """
-import os, runpy, sys
-ids = {"uid": 0}
-os.getuid = os.geteuid = lambda: ids["uid"]
-os.setgroups = lambda groups: print(f"seam: setgroups {groups}", flush=True)
-os.setgid = lambda gid: print(f"seam: setgid {gid}", flush=True)
-def setuid(uid):
-    print(f"seam: setuid {uid}", flush=True)
-    ids["uid"] = uid
-os.setuid = setuid
-runpy.run_path(sys.argv[1], run_name="__main__")
-"""
-
 
 def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
@@ -93,84 +72,37 @@ def fake_agent(base: str, token: str, *, skip: str | None, stopping: threading.E
 class FakeDocker:
     """Every docker argv `check` runs: the agent is real or scripted, the daemon never is."""
 
-    def __init__(self, *, config: dict | None = None, real: bool = False, skip: str | None = None,
-                 processes: tuple[tuple[str, str], ...] = ((INIT_PID, "10000"),),
-                 kill_status: int = 0,
-                 ignores_term: bool = False, exits: int = 0, exited_early: bool = False, busybox: bool = False) -> None:
+    def __init__(self, *, config: dict | None = None, real: bool = False, skip: str | None = None) -> None:
         self.argvs: list[list[str]] = []
-        # A daemon whose `ps` has no `uid` column, only `user` (OrbStack's).
-        self.busybox = busybox
         self.config = COMPLIANT if config is None else config
-        self.real, self.skip, self.processes = real, skip, processes
-        self.kill_status = kill_status
-        self.ignores_term, self.exits, self.exited_early = ignores_term, exits, exited_early
+        self.real, self.skip = real, skip
         self.stopping = threading.Event()
-        self.work = tempfile.mkdtemp(prefix="image-check-")
-        self.log = os.path.join(self.work, "agent.log")
+        self.log = os.path.join(tempfile.mkdtemp(prefix="image-check-"), "agent.log")
         self.process: subprocess.Popen | None = None
-        # Kept rather than pointed at: the CLI stages the credential in a
-        # temporary directory it deletes when the check returns.
-        self.credentials = ""
-        self.credential_mode = 0
-        self.cp: list[str] = []
+        self.environment: dict[str, str] = {}
 
-    def _start(self) -> None:
+    def _run(self, argv: list[str]) -> None:
+        self.environment = dict(argv[index + 1].split("=", 1) for index, part in enumerate(argv) if part == "--env")
         # What `--add-host host.docker.internal:host-gateway` does for a
-        # container, done to the file: this process reaches the stub on loopback.
-        rewritten = self.credentials.replace("host.docker.internal", "127.0.0.1")
-        values = dict(line.split("=", 1) for line in rewritten.splitlines() if "=" in line)
+        # container, done to the value: this process reaches the stub on loopback.
+        base = self.environment["PLOW_API_BASE"].replace("host.docker.internal", "127.0.0.1")
         if not self.real:
-            threading.Thread(target=fake_agent, args=(values["PLOW_API_BASE"], values["PLOW_AGENT_TOKEN"]),
+            threading.Thread(target=fake_agent, args=(base, self.environment["PLOW_AGENT_TOKEN"]),
                              kwargs={"skip": self.skip, "stopping": self.stopping}, daemon=True).start()
             return
-        credentials = os.path.join(self.work, "credentials")
-        with open(credentials, "w") as handle:
-            handle.write(rewritten)
-        os.chmod(credentials, 0o600)
+        clean = {key: value for key, value in os.environ.items() if not key.startswith(("PLOW_", "AGENT_ID"))}
         with open(self.log, "w") as log:
             self.process = subprocess.Popen(
-                [sys.executable, "-c", PRIVILEGE_SEAM, os.path.join(TEMPLATE, "agent.py")],
-                env={**os.environ, "PLOW_CREDENTIALS": credentials}, stdout=log, stderr=subprocess.STDOUT)
-
-    def _state(self) -> str:
-        if self.exited_early:
-            return "exited 1"
-        if self.process is not None:
-            code = self.process.poll()
-            # A signal death reads as docker reports it: 128 + the signal.
-            return "running 0" if code is None else f"exited {128 - code if code < 0 else code}"
-        return f"exited {self.exits}" if self.stopping.is_set() else "running 0"
+                [sys.executable, os.path.join(TEMPLATE, "agent.py")],
+                env={**clean, **self.environment, "PLOW_API_BASE": base}, stdout=log, stderr=subprocess.STDOUT)
 
     def __call__(self, argv: list[str], env: dict[str, str]) -> tuple[int, str]:
         self.argvs.append(argv)
         if argv[1:3] == ["image", "inspect"]:
             return 0, json.dumps(self.config)
-        if argv[1] == "create":
+        if argv[1] == "run":
+            self._run(argv)
             return 0, CONTAINER + "\n"
-        if argv[1] == "cp":
-            self.cp = argv
-            staged = os.path.join(argv[2], "credentials")
-            with open(staged) as handle:
-                self.credentials = handle.read()
-            self.credential_mode = os.stat(staged).st_mode & 0o777
-            return 0, ""
-        if argv[1] == "start":
-            self._start()
-            return 0, ""
-        if argv[1] == "top":
-            if self.busybox and argv[4] == "pid,uid,args":
-                return 1, ""
-            column = "USER" if self.busybox else "UID"
-            return 0, f"PID    {column}    COMMAND\n" + "".join(
-                f"{pid}   {'root' if self.busybox and uid == '0' else uid}   python3 agent.py\n" for pid, uid in self.processes)
-        if argv[1] == "inspect":
-            return 0, (INIT_PID if argv[3] == "{{.State.Pid}}" else self._state()) + "\n"
-        if argv[1] == "kill":
-            if self.kill_status == 0 and not self.ignores_term:
-                if self.process is not None:
-                    self.process.send_signal(signal.SIGTERM)
-                self.stopping.set()
-            return self.kill_status, ""
         if argv[1] == "rm":
             self.stopping.set()
             if self.process is not None and self.process.poll() is None:
@@ -196,7 +128,7 @@ def main() -> int:
         output = io.StringIO()
         try:
             with contextlib.redirect_stderr(output):
-                passed, warned = check.check(docker, image="ghcr.io/you/plow-agents:latest", timeout=10, advice_wait=3, stop_timeout=3)
+                passed, warned = check.check(docker, image="ghcr.io/you/plow-agents:latest", timeout=10, advice_wait=3)
             return passed, warned, None, output.getvalue()
         except check.ContractError as failure:
             return None, None, failure, output.getvalue()
@@ -210,24 +142,13 @@ def main() -> int:
     check_that("and makes exactly the contract's two assertions", passed, CONTRACT)
     check_that("with no warning, having replied to the owner", (warned, "warn" in output, "it said: Hi Owner" in output),
                ([], False, True))
-    agent_log = docker.agent_log()
-    check_that("the agent drops groups, then gid, then uid, before it says anything",
-               [line for line in agent_log.splitlines() if line.startswith(("seam:", "INFO starting"))][:4],
-               ["seam: setgroups []", "seam: setgid 10000", "seam: setuid 10000", "INFO starting as uid 10000"])
-    check_that("and the SIGTERM really ended its process, with 0", docker.process and docker.process.returncode, 0)
-    check_that("the credential is a direct deploy's: no AGENT_ID, which the agent must not need",
-               sorted(line.split("=")[0] for line in docker.credentials.splitlines()), ["PLOW_AGENT_TOKEN", "PLOW_API_BASE"])
-    check_that("and mode 600, as Plow writes it", oct(docker.credential_mode), "0o600")
-    check_that("and names the container by the host it can reach this machine on",
-               "PLOW_API_BASE=http://host.docker.internal:" in docker.credentials, True)
-    check_that("it is copied in as root rather than bind-mounted, so the mode is Plow's",
-               (docker.cp[1], docker.cp[3]), ("cp", f"{CONTAINER}:/var/lib/"))
-    check_that("the container is created with no command override",
-               [argv for argv in docker.argvs if argv[1] == "create"],
-               [["docker", "create", "--add-host", "host.docker.internal:host-gateway", "ghcr.io/you/plow-agents:latest"]])
-    check_that("the stop is a SIGTERM the check times itself, not `docker stop`",
-               ([argv for argv in docker.argvs if argv[1] == "kill"], any(argv[1] == "stop" for argv in docker.argvs)),
-               ([["docker", "kill", "--signal", "TERM", CONTAINER]], False))
+    check_that("the container gets the contract's environment -- no AGENT_ID, which the agent must not need",
+               sorted(docker.environment), ["PLOW_AGENT_TOKEN", "PLOW_API_BASE"])
+    check_that("and names the stub by the host a container reaches this machine on",
+               docker.environment.get("PLOW_API_BASE", "").startswith("http://host.docker.internal:"), True)
+    check_that("it is started with no command override",
+               [argv[:5] + argv[-1:] for argv in docker.argvs if argv[1] == "run"],
+               [["docker", "run", "--detach", "--add-host", "host.docker.internal:host-gateway", "ghcr.io/you/plow-agents:latest"]])
     check_that("and torn down whatever happened", ["docker", "rm", "--force", CONTAINER] in docker.argvs, True)
 
     # --- only the contract fails the check ----------------------------------
@@ -242,20 +163,10 @@ def main() -> int:
 
     # --- the advice warns, and never fails ----------------------------------
     identity, websocket, reply = "it calls GET /v1/agents/cloud/me on boot", "it opens the chat WebSocket", "it replies to a message"
-    uid, sigterm = "every process but PID 1 runs as uid 10000", "it exits cleanly on SIGTERM"
     for label, docker, warnings in (
-        ("a root PID 1 whose agent is uid 10000", FakeDocker(processes=((INIT_PID, "0"), ("4300", "10000"))), []),
-        ("a busybox ps, root PID 1 and a uid-10000 agent", FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "10000"))), []),
         ("no identity call", FakeDocker(skip="me"), [identity]),
         ("no WebSocket", FakeDocker(skip="websocket"), [websocket, reply]),
         ("no reply", FakeDocker(skip="reply"), [reply]),
-        ("running as root", FakeDocker(processes=((INIT_PID, "0"),)), [uid]),
-        ("a busybox ps showing a root agent", FakeDocker(busybox=True, processes=((INIT_PID, "0"), ("4300", "0"))), [uid]),
-        ("a root agent with a uid-10000 child", FakeDocker(processes=((INIT_PID, "0"), ("4300", "0"), ("4301", "10000"))), [uid]),
-        ("an agent that ignores SIGTERM", FakeDocker(ignores_term=True), [sigterm]),
-        ("a nonzero exit on SIGTERM", FakeDocker(exits=137), [sigterm]),
-        ("a container already gone", FakeDocker(exited_early=True), [sigterm]),
-        ("a failed docker kill", FakeDocker(kill_status=1), [sigterm]),
     ):
         passed, warned, failed, output = run_check(docker)
         check_that(f"{label} passes the contract", (failed and failed.assertion, passed), (None, CONTRACT))
@@ -274,6 +185,14 @@ def main() -> int:
         code = _exit_within(agent, 10)
         check_that("a 401 on the ticket is raised, not retried forever", code not in (None, 0), True)
         check_that("and it asked once", plow.tickets, 1)
+    with Plow("hang") as plow:
+        agent = plow.boot(token=None)
+        plow.ticket_asked.wait(10)
+        check_that("with no PLOW_AGENT_TOKEN it sends no Authorization -- the proxy adds it", plow.authorizations[:1], [None])
+    with Plow("hang") as plow:
+        agent = plow.boot(token="t")
+        plow.ticket_asked.wait(10)
+        check_that("with one, it sends it as a bearer", plow.authorizations[:1], ["Bearer t"])
 
     # --- init copies the template -------------------------------------------
     with tempfile.TemporaryDirectory() as work:
@@ -328,8 +247,8 @@ def main() -> int:
     # --- the reference agent satisfies the contract it ships with ------------
     agent = {}
     exec(compile(sources["agent.py"], "agent.py", "exec"), agent)  # noqa: S102 -- our own file, read above
-    check_that("the reference agent refuses a credential missing any of the three keys",
-               _refuses(agent["read_credentials"]), True)
+    check_that("the reference agent refuses to start without PLOW_API_BASE", _refuses(agent["read_environment"]), True)
+    check_that("and needs nothing else", agent["read_environment"]({"PLOW_API_BASE": "http://x/"}), ("http://x", None))
 
     # --- the stub reads no body before the route and the token say whose ----
     with stub.Stub(host="127.0.0.1") as local:
@@ -352,10 +271,11 @@ class Plow:
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         plow = self
-        self.ticket_asked, self.tickets = threading.Event(), 0
+        self.ticket_asked, self.tickets, self.authorizations = threading.Event(), 0, []
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
+                plow.authorizations.append(self.headers.get("Authorization"))
                 self._answer(200, {"line": {"uid": "ln_x"}, "chats": []})
 
             def do_POST(self) -> None:  # noqa: N802
@@ -377,7 +297,6 @@ class Plow:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
-        self.work = tempfile.mkdtemp(prefix="image-check-plow-")
         self.agent: subprocess.Popen | None = None
 
     def __enter__(self) -> Plow:
@@ -390,13 +309,12 @@ class Plow:
             self.agent.wait()
         self.server.shutdown()
 
-    def boot(self) -> subprocess.Popen:
-        credentials = os.path.join(self.work, "credentials")
-        with open(credentials, "w") as handle:
-            handle.write(f"AGENT_ID=demo\nPLOW_API_BASE=http://127.0.0.1:{self.server.server_address[1]}\nPLOW_AGENT_TOKEN=t\n")
-        self.agent = subprocess.Popen(
-            [sys.executable, "-c", PRIVILEGE_SEAM, os.path.join(TEMPLATE, "agent.py")],
-            env={**os.environ, "PLOW_CREDENTIALS": credentials}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    def boot(self, *, token: str | None = "t") -> subprocess.Popen:
+        clean = {key: value for key, value in os.environ.items() if not key.startswith(("PLOW_", "AGENT_ID"))}
+        environment = {"AGENT_ID": "demo", "PLOW_API_BASE": f"http://127.0.0.1:{self.server.server_address[1]}",
+                       **({"PLOW_AGENT_TOKEN": token} if token else {})}
+        self.agent = subprocess.Popen([sys.executable, os.path.join(TEMPLATE, "agent.py")], env={**clean, **environment},
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return self.agent
 
 
@@ -422,17 +340,12 @@ def _exit_within(process: subprocess.Popen, seconds: float) -> int | None:
         return None
 
 
-def _refuses(read_credentials) -> bool:
-    with tempfile.NamedTemporaryFile("w", suffix=".creds", delete=False) as handle:
-        handle.write("PLOW_API_BASE=http://x\n")
-        path = handle.name
+def _refuses(read_environment) -> bool:
     try:
-        read_credentials(path)
+        read_environment({"PLOW_AGENT_TOKEN": "t"})
         return False
     except SystemExit:
         return True
-    finally:
-        os.unlink(path)
 
 
 if __name__ == "__main__":

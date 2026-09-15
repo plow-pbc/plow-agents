@@ -11,15 +11,18 @@ Do the steps yourself, or hand this page to an AI coding agent and let it do mos
 A cloud image has three obligations:
 
 - Your image's `CMD` is PID 1.
-- Plow writes one file, `/var/lib/plow/credentials`, with `PLOW_API_BASE` (no `/v1`) and
-  `PLOW_AGENT_TOKEN` — plus `AGENT_ID`, the listing slug, only when the agent was deployed from a
-  listing. Don't require it.
-- Your agent uses them to talk to the Plow API.
+- Your agent reads `PLOW_API_BASE` (no `/v1`) from its environment and talks to it.
+- If `PLOW_AGENT_TOKEN` is set, send it as a bearer.
 
-That is the whole of it. The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything else on this
-page — read the file as root and drop to a non-root user, listen on no port, ask
-`GET /v1/agents/cloud/me` on every boot, exit on SIGTERM — is advice. `image check` warns about it
-and never fails on it.
+That is the whole of it. The environment is the interface: Plow writes nothing inside the VM. On
+exe.dev, `PLOW_API_BASE` is a proxy that adds the agent's token to every request, so the token
+never reaches the VM and `PLOW_AGENT_TOKEN` is not set there; it is set for local runs, where there
+is no proxy. `AGENT_ID`, the listing slug, is set only when the agent was deployed from a listing.
+Don't require it.
+
+The authority is [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md); this is a restatement. Everything else on this
+page — listen on no port, ask `GET /v1/agents/cloud/me` on every boot, exit on SIGTERM — is
+advice.
 
 ## What you need
 
@@ -91,7 +94,7 @@ cd plow-agents
 
 ```
 agent.py                        the whole agent, ~150 lines, no framework
-Dockerfile                      python:3.13-slim, uid 10000, no ports
+Dockerfile                      python:3.13-slim, runs as uid 10000, no ports
 plow-agents.toml                slug and image
 .github/workflows/publish.yml   build, check, push on a v* tag
 README.md                       what to edit
@@ -118,8 +121,9 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 ```
 
 Everything above it keeps [the contract](#the-contract) and follows the advice: read
-`/var/lib/plow/credentials` as root, drop to uid 10000, call `GET {PLOW_API_BASE}/v1/agents/cloud/me`
-on every boot, open the chat WebSocket, answer, and exit on SIGTERM. Any image that keeps the
+`PLOW_API_BASE` and, if set, `PLOW_AGENT_TOKEN` from the environment, call
+`GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot, open the chat WebSocket, answer, and exit
+on SIGTERM. Any image that keeps the
 contract works — the reference agent is one, not the one.
 
 ## Step 4 — Build the image
@@ -139,12 +143,12 @@ plow-agents image check
 ```
 
 This is the step that saves a failed deploy. It runs your built image the way exe.dev will —
-no command override, a credentials file copied in as root at mode 0600, a stub Plow on this
-machine. Two things fail it, and they are the contract's:
+no command override, `PLOW_API_BASE` pointing at a stub Plow on this machine, and a fake
+`PLOW_AGENT_TOKEN`. Two things fail it, and they are the contract's:
 
 ```
   ok   the image has a CMD to run as PID 1
-  ok   something inside calls the Plow API with the token from the credentials file
+  ok   something inside calls the Plow API with PLOW_AGENT_TOKEN
 ```
 
 Then the advice, each line `ok` or `warn`. A warning never fails the check:
@@ -153,15 +157,13 @@ Then the advice, each line `ok` or `warn`. A warning never fails the check:
   ok   it calls GET /v1/agents/cloud/me on boot
   ok   it opens the chat WebSocket
   ok   it replies to a message
-  ok   every process but PID 1 runs as uid 10000
-  ok   it exits cleanly on SIGTERM
 ```
 
 A failure names the assertion and what was seen instead:
 
 ```
 plow-agents: ghcr.io/you/plow-agents:latest does not satisfy the contract.
-  FAILED: something inside calls the Plow API with the token from the credentials file
+  FAILED: something inside calls the Plow API with PLOW_AGENT_TOKEN
   saw:    no request reached the API
 ```
 
@@ -341,10 +343,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
   container has to reach it. Its token is random per run and dies with the check, but on a shared
   network that port is briefly open.
 - **`image check` cannot see inside your image.** It checks what is observable from outside: the
-  declared CMD, which uid the processes run as, what the agent said to Plow, and how it exited. An image that passes still has to be right.
-- **PID 1 starts as root, and that is correct.** Plow writes the credential root-owned `0600`, so
-  an image with `USER 10000` cannot read its own credential. Read it as root and drop privileges
-  — the reference agent does it in one function.
+  declared CMD and what the agent said to Plow. An image that passes still has to be right.
 - **A tag is never a reference.** Plow takes a digest-pinned `name@sha256:…` or a listing slug, and
   refuses anything else. `deploy latest` is an error, not a convenience.
 - **The image must be public.** `image push` fetches the pushed digest's manifest with no

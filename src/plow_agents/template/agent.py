@@ -3,14 +3,14 @@
 
 It keeps the contract and follows its advice, and does nothing else:
 
-  1. reads /var/lib/plow/credentials as root, then drops to uid 10000;
+  1. reads PLOW_API_BASE, and PLOW_AGENT_TOKEN if it is set, from its environment;
   2. calls GET {PLOW_API_BASE}/v1/agents/cloud/me for its line and its chats;
   3. opens the chat WebSocket and listens;
   4. answers each inbound message by POSTing one back, and exits on SIGTERM.
 
-Plow writes that credential root-owned 0600, so PID 1 starts as root -- and
-stops being root three lines later, before anything touches the network. That
-split is the whole reason this file has a `become_agent`.
+On exe.dev the token is not set: PLOW_API_BASE is a proxy that adds it to every
+request, so it never reaches the VM. It is set for local runs, where there is
+no proxy, and then it goes on every request as a bearer.
 
 Replace `compose_reply` with your agent. Everything above it is the contract
 and wants no edits; everything below it is yours.
@@ -32,9 +32,6 @@ from functools import partial
 
 import websockets
 
-CREDENTIALS = os.environ.get("PLOW_CREDENTIALS", "/var/lib/plow/credentials")
-# The contract's uid/gid. Everything after the credential read runs as this.
-AGENT_UID = AGENT_GID = 10000
 # The identity call is a dependency of coming up, not a nicety: an agent that
 # starts without it is guessing which line it is on. Retry briefly, fail closed.
 IDENTITY_ATTEMPTS = 10
@@ -56,46 +53,19 @@ def compose_reply(body: str, sender: dict, chat: dict) -> str | None:
 # --- the contract -----------------------------------------------------------
 
 
-def read_credentials(path: str = CREDENTIALS) -> dict[str, str]:
-    """The file Plow writes: root-owned 0600, KEY=value lines.
-
-    Read as data. Plow owns the path and the permissions; what the agent does
-    with the values afterwards is the agent's business.
-    """
-    values = {}
-    with open(path) as handle:
-        for raw in handle:
-            line = raw.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                values[key.strip()] = value.strip()
-    # AGENT_ID is written only for a listing deploy, so it is never required.
-    missing = [key for key in ("PLOW_API_BASE", "PLOW_AGENT_TOKEN") if not values.get(key)]
-    if missing:
-        raise SystemExit(f"{path} is missing {', '.join(missing)}")
-    return values
+def read_environment(environ: dict[str, str] = os.environ) -> tuple[str, str | None]:
+    """(PLOW_API_BASE, PLOW_AGENT_TOKEN or None). Read at run time, never baked in."""
+    base = (environ.get("PLOW_API_BASE") or "").rstrip("/")
+    if not base:
+        raise SystemExit("PLOW_API_BASE is not set -- Plow sets it; so must a local run")
+    return base, environ.get("PLOW_AGENT_TOKEN") or None
 
 
-def become_agent(uid: int = AGENT_UID, gid: int = AGENT_GID) -> None:
-    """Drop root, for good, the moment the credential has been read.
-
-    Groups first, then gid, then uid: after `setuid` there is no privilege left
-    to change the others with, and a drop that leaves a supplementary group
-    behind has not dropped anything. Already unprivileged (a local run as
-    yourself) is fine and does nothing.
-    """
-    if os.getuid() != 0:
-        return
-    os.setgroups([])
-    os.setgid(gid)
-    os.setuid(uid)
-    if os.getuid() != uid or os.geteuid() != uid:
-        raise SystemExit("could not drop to uid 10000 -- refusing to run as root")
-
-
-def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
+def call(method: str, url: str, token: str | None, body: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -103,7 +73,7 @@ def call(method: str, url: str, token: str, body: dict | None = None) -> dict:
         return json.loads(response.read() or b"null")
 
 
-async def request(method: str, url: str, token: str, body: dict | None = None) -> dict:
+async def request(method: str, url: str, token: str | None, body: dict | None = None) -> dict:
     """`call`, awaited without holding up shutdown.
 
     On a daemon thread rather than `asyncio.to_thread`: the executor behind
@@ -146,7 +116,7 @@ def transient(error: Exception) -> bool:
     return isinstance(error, (OSError, websockets.exceptions.ConnectionClosed))
 
 
-async def identify(base: str, token: str) -> dict:
+async def identify(base: str, token: str | None) -> dict:
     """Who am I, which line, which chats. Asked at boot, every boot.
 
     A move changes the answer without changing anything on the VM, so this is
@@ -168,7 +138,7 @@ async def identify(base: str, token: str) -> dict:
     raise SystemExit("could not reach Plow to identify -- refusing to start without a line")
 
 
-async def listen(base: str, token: str, chats: dict[str, dict]) -> None:
+async def listen(base: str, token: str | None, chats: dict[str, dict]) -> None:
     """Mint a ticket, open the socket, answer what arrives. Reconnect on transport failures only."""
     while True:
         try:
@@ -188,7 +158,7 @@ async def listen(base: str, token: str, chats: dict[str, dict]) -> None:
         await asyncio.sleep(RECONNECT_BACKOFF_S)
 
 
-async def handle(frame: dict, base: str, token: str, chats: dict[str, dict]) -> None:
+async def handle(frame: dict, base: str, token: str | None, chats: dict[str, dict]) -> None:
     """One `ChatEvent`. Only `message_received` asks for anything."""
     if frame.get("event_type") != "message_received":
         return
@@ -207,7 +177,7 @@ async def handle(frame: dict, base: str, token: str, chats: dict[str, dict]) -> 
         log.info("replied in %s", chat_uid)
 
 
-async def run(credentials: dict[str, str]) -> None:
+async def run(base: str, token: str | None) -> None:
     """Be the agent until SIGTERM.
 
     The signal handlers go in before the first request, so there is no window
@@ -221,8 +191,6 @@ async def run(credentials: dict[str, str]) -> None:
         loop.add_signal_handler(received, stopping.set)
 
     async def agent() -> None:
-        base = credentials["PLOW_API_BASE"].rstrip("/")
-        token = credentials["PLOW_AGENT_TOKEN"]
         identity = await identify(base, token)
         chats = {chat["uid"]: chat for chat in identity.get("chats") or []}
         log.info("line %s, %d chat(s)", (identity.get("line") or {}).get("uid"), len(chats))
@@ -242,13 +210,12 @@ async def run(credentials: dict[str, str]) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
-    credentials = read_credentials()
-    become_agent()
-    listing = credentials.get("AGENT_ID")
-    log.info("starting as uid %d%s", os.getuid(), f", listing {listing}" if listing else "")
-    # SIGTERM is how the VM is stopped. Exiting on it is the whole of the
-    # shutdown advice; `image check` warns about a container killed after the grace period.
-    asyncio.run(run(credentials))
+    base, token = read_environment()
+    # AGENT_ID is set only for a listing deploy, so it is never required.
+    listing = os.environ.get("AGENT_ID")
+    log.info("starting%s", f", listing {listing}" if listing else "")
+    # SIGTERM is how the VM is stopped; exiting on it is the whole of the shutdown advice.
+    asyncio.run(run(base, token))
 
 
 if __name__ == "__main__":
