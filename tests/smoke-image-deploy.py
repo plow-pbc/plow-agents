@@ -368,6 +368,12 @@ def main() -> int:
               docker.argvs, [["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
         check("and ends on the command to follow its logs", out.strip().splitlines()[-1], "docker compose logs -f")
 
+        docker = FakeDocker()
+        Stub.created.clear()
+        code, _, err = run("deploy", "--local", "--line", FREE, cwd=local, base=base, token=token, docker=docker)
+        check("a second --local refuses the credential already here, before anything is built",
+              (code != 0, "already exists" in err, docker.argvs, Stub.created), (True, True, [], []))
+
         failing = os.path.join(work, "failing-build")
         os.makedirs(failing)
         with open(os.path.join(failing, "compose.yml"), "w") as handle:
