@@ -258,6 +258,27 @@ def main() -> int:
         check("and the new digest is what the file now reads", config.load(os.path.dirname(indented)).last_pushed, second)
         config.record_last_pushed(toml, SHA)
 
+        # A checkout can ship its toml as a symlink; push must not write through it.
+        linked = os.path.join(work, "linked")
+        os.makedirs(linked)
+        target = os.path.join(work, "target.toml")
+        with open(target, "w") as handle:
+            handle.write(f'image = "{IMAGE}"\n')
+        os.symlink(target, os.path.join(linked, config.CONFIG_FILE))
+        code, _, err = run("image", "push", cwd=linked, base=base, token=token, docker=FakeDocker(digest=second), registry=Registry())
+        with open(target) as handle:
+            check("push refuses a symlinked toml and leaves its target alone",
+                  (code != 0, "symlink" in err, handle.read()), (True, True, f'image = "{IMAGE}"\n'))
+
+        overridden = os.path.join(work, "overridden")
+        os.makedirs(overridden)
+        with open(os.path.join(overridden, config.CONFIG_FILE), "w") as handle:
+            handle.write('image = "ghcr.io/you/else"\n')
+        code, out, _ = run("image", "push", "--image", IMAGE, cwd=overridden, base=base, token=token,
+                           docker=FakeDocker(digest=second), registry=Registry())
+        check("push --image prints the overriding reference but records nothing against the toml's image",
+              (code, out.strip(), config.load(overridden).last_pushed), (0, f"{IMAGE}@{second}", ""))
+
         # --- deploy ---------------------------------------------------------
         Stub.created.clear()
         code, out, err = run("deploy", cwd=work, base=base, token=token)
@@ -272,6 +293,11 @@ def main() -> int:
         explicit = "sha256:" + "ef" * 32
         run("deploy", explicit, "--line", FREE, cwd=work, base=base, token=token)
         check("a digest argument beats last_pushed", Stub.created[-1]["provider"], f"exe:{IMAGE}@{explicit}")
+
+        Stub.created.clear()
+        code, _, _ = run("deploy", "--image", "ghcr.io/other/x", cwd=work, base=base, token=token)
+        check("deploy takes no --image, so an image and a digest cannot come from different places",
+              (code != 0, Stub.created), (True, []))
 
         Stub.created.clear()
         code, _, err = run("deploy", "latest", cwd=work, base=base, token=token)

@@ -77,6 +77,8 @@ def record_last_pushed(path: str, digest: str) -> None:
     """
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         die(f"refusing to record a digest that is not sha256:<64 hex>: {digest}")
+    if os.path.islink(path):
+        die(f"{path} is a symlink -- refusing to rewrite what it points at")
     try:
         with open(path) as handle:
             body = handle.read()

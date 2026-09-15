@@ -377,7 +377,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
 | `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will: fail on the contract, warn on the advice. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
-| `deploy [DIGEST] [--line] [--image]` | Run a pushed digest on one of your lines. |
+| `deploy [DIGEST] [--line]` | Run a pushed digest on one of your lines. |
 | `agents` | What is deployed on this account: line, slug, status, image digest. |
 | `mint <line>` | A self-hosted credential for one line, into `./plow-credentials`. |
 | `rotate` | Replace that credential. |

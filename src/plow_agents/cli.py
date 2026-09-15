@@ -387,8 +387,11 @@ def image_push(
     this = state(ctx)
     settings = config.load(image=image)
     digest = images.push(this.docker, image=settings.need_image(), tag=tag)
-    config.record_last_pushed(settings.path, digest)
-    log(f"Recorded last_pushed in {settings.path}.")
+    # last_pushed is a digest of the toml's image; another repository's digest
+    # recorded there would deploy as a reference that does not exist.
+    if image is None:
+        config.record_last_pushed(settings.path, digest)
+        log(f"Recorded last_pushed in {settings.path}.")
     print(f"{settings.need_image()}@{digest}")
 
 
@@ -400,11 +403,10 @@ def deploy(
     ctx: typer.Context,
     digest: Annotated[str | None, typer.Argument(help="sha256:... to deploy (default: last_pushed)")] = None,
     line: Annotated[str | None, typer.Option("--line", help="line uid to deploy on (default: the one free line)")] = None,
-    image: Annotated[str | None, typer.Option("--image", help="override the image in plow-agents.toml")] = None,
 ) -> None:
     """Run a pushed digest on one of your own lines."""
     this = state(ctx)
-    settings = config.load(image=image)
+    settings = config.load()
     reference = settings.need_image()
     digest = digest or settings.need_last_pushed()
     if not DIGEST.match(digest):
