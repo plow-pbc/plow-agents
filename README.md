@@ -83,9 +83,11 @@ directory; `--slug` and `--image` override it for one run without writing to it.
 
 Your repo needs a `Dockerfile`. It must satisfy the container contract in
 [api/cloud-agents/README.md](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md):
-the `CMD` is PID 1 and runs as uid/gid 10000, it listens on no ports, it reads
-`/var/lib/plow/credentials`, and on every boot it calls `GET {PLOW_API_BASE}/v1/agents/cloud/me`
-and acts on the answer.
+the `CMD` is PID 1, your agent reads `PLOW_API_BASE` (no `/v1`) from its environment and talks
+to it, and if `PLOW_AGENT_TOKEN` is set it sends it as a bearer. Plow writes nothing inside the
+VM. `AGENT_ID` is set only for a deploy from a listing; don't require it. The rest is advice:
+listen on no ports, call `GET {PLOW_API_BASE}/v1/agents/cloud/me` on every boot and act on the
+answer, exit on SIGTERM.
 
 ```sh
 plow-agents image build
@@ -178,6 +180,10 @@ plow-agents deploy sha256:9c21...ff04 --line ln_a1b2c3   # some earlier digest
 
 With no digest it deploys `last_pushed`. With no `--line` it deploys on your one free line, and
 refuses if there is more than one rather than picking.
+
+Plow boots the image with `PLOW_API_BASE` in its environment. On exe.dev that address is a proxy
+that adds the agent's token to every request, so the token never reaches the VM and
+`PLOW_AGENT_TOKEN` is not set: an image that insists on it never gets past boot.
 
 Plow answers before the machine is built, so `deploy` says *requested* and stops there. `agents`
 is what tells you how it ended:
