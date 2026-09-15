@@ -39,7 +39,7 @@ from .api import (
     token_path,
     write_private,
 )
-from .docker import Runner, subprocess_runner
+from .docker import Runner, run, subprocess_runner
 from .photo import is_hosted_url, read_photo, upload_photo
 
 POLL_S = 3
@@ -375,22 +375,22 @@ def image_push(
 @app.command()
 def deploy(
     ctx: typer.Context,
-    digest: Annotated[str | None, typer.Argument(help="sha256:... to deploy (default: last_pushed)")] = None,
+    target: Annotated[
+        str | None,
+        typer.Argument(help="image@sha256:..., a bare sha256:... of the toml's image, or exe:<slug> (default: last_pushed)"),
+    ] = None,
     line: Annotated[str | None, typer.Option("--line", help="line uid to deploy on (default: the one free line)")] = None,
+    local: Annotated[bool, typer.Option("--local", help="mint a credential and run this checkout's compose.yml here")] = False,
 ) -> None:
-    """Run a pushed digest on one of your own lines."""
+    """Run an image or a listing on one of your lines: on exe.dev, or here with --local."""
     this = state(ctx)
-    settings = config.load()
-    reference = settings.need_image()
-    digest = digest or settings.need_last_pushed()
-    if not DIGEST.match(digest):
-        die(f"{digest} is not a sha256 digest -- Plow deploys digests, never tags")
+    if local:
+        _deploy_local(ctx, this, target=target, line=line)
+        return
+    provider, name = _cloud_target(target, config.load())
     account = this.token()
     line = line or _only_free_line(this.api_base, account)
-    created = call(
-        "POST", this.api_base, "/v1/agents", token=account,
-        body={"name": settings.slug or reference.rsplit("/", 1)[-1], "line_uid": line, "provider": f"exe:{reference}@{digest}"},
-    )
+    created = call("POST", this.api_base, "/v1/agents", token=account, body={"name": name, "line_uid": line, "provider": provider})
     agent = created["agent"]
     # Plow answers before the VM is built, so nothing here has seen the agent
     # boot: the phase arrives as `provisioning` and only `agents` can say how
@@ -398,7 +398,37 @@ def deploy(
     # that read like success.
     log(f"Requested agent {agent['uid']} on line:{line} ({agent.get('status') or 'provisioning'}).")
     log("Run `plow-agents agents` until it is running.")
-    print(f"{agent['uid']}\t{line}\t{reference}@{digest}")
+    print(f"{agent['uid']}\t{line}\t{provider.removeprefix('exe:')}")
+
+
+def _cloud_target(target: str | None, settings: config.Config) -> tuple[str, str]:
+    """(provider, agent name) for what `deploy` was given: a listing slug, an image by digest, or last_pushed."""
+    if target is not None and target.startswith("exe:"):
+        slug = target.removeprefix("exe:")
+        if not slug or "@" in slug or "/" in slug:
+            die(f"{target} is not exe:<slug> -- an image is deployed as image@sha256:..., without exe:")
+        return target, slug
+    if target is not None and "@" in target:
+        reference, _, digest = target.partition("@")
+    else:
+        reference, digest = settings.need_image(), target or settings.need_last_pushed()
+    if not DIGEST.match(digest):
+        die(f"{digest} is not a sha256 digest -- Plow deploys digests or exe:<slug>, never tags")
+    return f"exe:{reference}@{digest}", settings.slug or reference.rsplit("/", 1)[-1]
+
+
+def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: str | None) -> None:
+    """`mint`, then `docker compose up` on this checkout's compose.yml."""
+    if target is not None:
+        die("--local runs this checkout's compose.yml -- it takes no image or slug")
+    compose = os.path.abspath("compose.yml")
+    if not os.path.isfile(compose):
+        die(f"no compose.yml in {os.getcwd()} -- --local runs `docker compose up` here; copy compose.example.yml from "
+            "https://github.com/plow-pbc/plow-agents beside your Dockerfile first")
+    line = line or _only_free_line(this.api_base, this.token())
+    mint(ctx, line=line, credential_file=CREDENTIAL_FILE, agent_api_base=None)
+    run(this.docker, ["docker", "compose", "up", "--build", "-d"], what="docker compose up")
+    print("docker compose logs -f")
 
 
 def _only_free_line(api_base: str, account: str) -> str:
