@@ -245,10 +245,12 @@ def main() -> int:
         code, out, _ = run("image", "push", "--image", "docker.io/you/plow-agents", cwd=work, base=base, token=token,
                            docker=FakeDocker(digest=other), registry=Registry(realm="https://auth.docker.io/token"))
         check("Docker Hub's token host is the one other realm followed", (code, out.strip()), (0, f"docker.io/you/plow-agents@{other}"))
-        code, out, _ = run("image", "push", "--image", "registry.example:5000/you/plow-agents", cwd=work, base=base, token=token,
-                           docker=FakeDocker(digest=other), registry=Registry(realm="https://registry.example:5000/token"))
-        check("a registry with a port takes a realm on that same host and port",
-              (code, out.strip()), (0, f"registry.example:5000/you/plow-agents@{other}"))
+        for registry_host, realm in (("registry.example:5000", "https://registry.example:5000/token"),
+                                     ("registry.example:443", "https://registry.example/token")):
+            code, out, _ = run("image", "push", "--image", f"{registry_host}/you/plow-agents", cwd=work, base=base, token=token,
+                               docker=FakeDocker(digest=other), registry=Registry(realm=realm))
+            check(f"{registry_host} takes a realm on the same host and port: {realm}",
+                  (code, out.strip()), (0, f"{registry_host}/you/plow-agents@{other}"))
 
         docker = FakeDocker(digest="not-a-digest")
         code, _, err = run("image", "push", cwd=work, base=base, token=token, docker=docker, registry=Registry())

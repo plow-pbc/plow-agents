@@ -100,10 +100,10 @@ def _anonymous_token(client: httpx.Client, challenge: str, host: str, name: str)
     realm = fields.get("realm")
     if not realm:
         return None
-    parsed = httpx.URL(realm)
-    # `host` is an authority, and keeps a registry's explicit port.
-    authority = f"{parsed.host}:{parsed.port}" if parsed.port else parsed.host
-    if parsed.scheme != "https" or authority != TOKEN_HOSTS.get(host, host):
+    # `host` is an authority and keeps an explicit port, `:443` included; both
+    # sides compare as (host, port) with https's default filled in.
+    parsed, wanted = httpx.URL(realm), httpx.URL(f"https://{TOKEN_HOSTS.get(host, host)}")
+    if parsed.scheme != "https" or (parsed.host, parsed.port or 443) != (wanted.host, wanted.port or 443):
         die(f"{host} asked for a token from {realm} -- refusing a realm that is not https on {TOKEN_HOSTS.get(host, host)}")
     query = {"service": fields.get("service", ""), "scope": fields.get("scope") or f"repository:{name}:pull"}
     answer = client.get(realm, params={key: value for key, value in query.items() if value})
