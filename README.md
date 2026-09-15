@@ -31,7 +31,7 @@ and never fails on it.
   `mint` and `deploy` never touch it.
 - **A public registry you can push to** — ghcr.io, Docker Hub, ECR Public, anything. Plow pulls
   anonymously, so the image must be public. Write a Docker Hub image with its host,
-  `docker.io/you/my-agent`: Plow reads the registry from the reference, and a bare `you/my-agent`
+  `docker.io/you/plow-agents`: Plow reads the registry from the reference, and a bare `you/plow-agents`
   names none.
 
 You do not need `gh`, a GitHub CLI login, or a Python of your own.
@@ -85,8 +85,8 @@ One repo, one agent. `init` writes a working one: a reference agent, a Dockerfil
 the contract, a GitHub Action, and `plow-agents.toml` — the file that carries the identity.
 
 ```sh
-plow-agents init --slug my-agent --image ghcr.io/you/my-agent my-agent
-cd my-agent
+plow-agents init --slug plow-agents --image ghcr.io/you/plow-agents plow-agents
+cd plow-agents
 ```
 
 ```
@@ -98,8 +98,8 @@ README.md                       what to edit
 ```
 
 ```toml
-slug = "my-agent"
-image = "ghcr.io/you/my-agent"
+slug = "plow-agents"
+image = "ghcr.io/you/plow-agents"
 ```
 
 `image` is a repository with no tag. Every `image` verb reads this file from the working
@@ -129,7 +129,7 @@ plow-agents image build
 
 exe.dev runs `linux/amd64`, so that is what gets built, whatever your laptop is.
 
-**Checkpoint:** `docker images ghcr.io/you/my-agent` lists the tag.
+**Checkpoint:** `docker images ghcr.io/you/plow-agents` lists the tag.
 
 ## Step 5 — Check it against the contract
 
@@ -159,7 +159,7 @@ Then the advice, each line `ok` or `warn`. A warning never fails the check:
 A failure names the assertion and what was seen instead:
 
 ```
-plow-agents: ghcr.io/you/my-agent:latest does not satisfy the contract.
+plow-agents: ghcr.io/you/plow-agents:latest does not satisfy the contract.
   FAILED: something inside calls the Plow API with the token from the credentials file
   saw:    no request reached the API
 ```
@@ -200,8 +200,8 @@ On a first push to ghcr this stops at the second one, because **a brand-new ghcr
 private**. The package does not exist until you have pushed, so it cannot be made public any
 earlier. Do it now:
 
-1. Open `https://github.com/users/you/packages/container/my-agent/settings`
-   (an organisation's is `https://github.com/orgs/your-org/packages/container/my-agent/settings`).
+1. Open `https://github.com/users/you/packages/container/plow-agents/settings`
+   (an organisation's is `https://github.com/orgs/your-org/packages/container/plow-agents/settings`).
 2. **Danger Zone → Change visibility → Public.**
 
 On Docker Hub the switch is on the repository's **Settings** tab. ECR Public repositories are
@@ -214,12 +214,12 @@ plow-agents image push
 ```
 
 ```
-ghcr.io/you/my-agent@sha256:3f0e...c19a
+ghcr.io/you/plow-agents@sha256:3f0e...c19a
 ```
 
 ```toml
-slug = "my-agent"
-image = "ghcr.io/you/my-agent"
+slug = "plow-agents"
+image = "ghcr.io/you/plow-agents"
 last_pushed = "sha256:3f0e...c19a"
 ```
 
@@ -229,10 +229,10 @@ image or a listing slug, nothing else, and the digest is the only thing that say
 **Checkpoint:** `last_pushed` is in `plow-agents.toml`, and a pull with no login answers `200`:
 
 ```sh
-TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:you/my-agent:pull" | jq -r .token)
+TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:you/plow-agents:pull" | jq -r .token)
 curl -sI -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TOKEN" \
   -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-  https://ghcr.io/v2/you/my-agent/manifests/sha256:3f0e...c19a
+  https://ghcr.io/v2/you/plow-agents/manifests/sha256:3f0e...c19a
 ```
 
 That is the whole test: it is the pull Plow does. Not `DOCKER_CONFIG=$(mktemp -d) docker manifest
@@ -259,7 +259,7 @@ plow-agents agents
 
 ```
 LINE	SLUG	STATUS	IMAGE
-ln_a1b2c3	-	provisioning	ghcr.io/you/my-agent@sha256:3f0e...c19a
+ln_a1b2c3	-	provisioning	ghcr.io/you/plow-agents@sha256:3f0e...c19a
 ```
 
 Run it again until `STATUS` is `running`. A `failed` carries Plow's reason beside it:

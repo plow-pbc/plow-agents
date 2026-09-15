@@ -223,7 +223,7 @@ class Stub:
     def identity(self) -> dict:
         """`GET /v1/agents/cloud/me`: one line, one chat, no Mac, a signup phrase."""
         return {
-            "line": {"uid": LINE_UID, "display_name": "image check", "provider_key": "+15555550100", "agent_uid": "agt_check"},
+            "line": {"uid": LINE_UID, "display_name": "plow-agents", "provider_key": "+15555550100", "agent_uid": "agt_check"},
             "chats": [{
                 "uid": CHAT_UID, "type": "dm", "status": "active",
                 "participants": [
@@ -232,7 +232,7 @@ class Stub:
                 ],
             }],
             "mcp_url": None,
-            "signup": {"name": "image check", "phrase": "text this to start"},
+            "signup": {"name": "plow-agents", "phrase": "text this to start"},
         }
 
     def message_frame(self) -> dict:

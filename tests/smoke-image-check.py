@@ -195,7 +195,7 @@ def main() -> int:
         output = io.StringIO()
         try:
             with contextlib.redirect_stderr(output):
-                passed, warned = check.check(docker, image="ghcr.io/you/agent:latest", timeout=10, advice_wait=3, stop_timeout=3)
+                passed, warned = check.check(docker, image="ghcr.io/you/plow-agents:latest", timeout=10, advice_wait=3, stop_timeout=3)
             return passed, warned, None, output.getvalue()
         except check.ContractError as failure:
             return None, None, failure, output.getvalue()
@@ -223,7 +223,7 @@ def main() -> int:
                (docker.cp[1], docker.cp[3]), ("cp", f"{CONTAINER}:/var/lib/"))
     check_that("the container is created with no command override",
                [argv for argv in docker.argvs if argv[1] == "create"],
-               [["docker", "create", "--add-host", "host.docker.internal:host-gateway", "ghcr.io/you/agent:latest"]])
+               [["docker", "create", "--add-host", "host.docker.internal:host-gateway", "ghcr.io/you/plow-agents:latest"]])
     check_that("the stop is a SIGTERM the check times itself, not `docker stop`",
                ([argv for argv in docker.argvs if argv[1] == "kill"], any(argv[1] == "stop" for argv in docker.argvs)),
                ([["docker", "kill", "--signal", "TERM", CONTAINER]], False))
@@ -277,7 +277,7 @@ def main() -> int:
     # --- init copies the template -------------------------------------------
     with tempfile.TemporaryDirectory() as work:
         repo = os.path.join(work, "repo")
-        written = template.copy_into(repo, slug="demo", image="ghcr.io/you/demo")
+        written = template.copy_into(repo, slug="plow-agents", image="ghcr.io/you/plow-agents")
         shipped = sorted(os.path.relpath(path, repo) for path in written)
         check_that("init copies the whole template", shipped,
                    [".dockerignore", ".github/workflows/publish.yml", ".gitignore", "Dockerfile", "README.md",
@@ -285,7 +285,7 @@ def main() -> int:
         with open(os.path.join(repo, "plow-agents.toml")) as handle:
             toml = handle.read()
         check_that("and fills in the slug and image it was given",
-                   ('slug = "demo"' in toml, 'image = "ghcr.io/you/demo"' in toml), (True, True))
+                   ('slug = "plow-agents"' in toml, 'image = "ghcr.io/you/plow-agents"' in toml), (True, True))
         try:
             template.copy_into(repo)
             refused = False

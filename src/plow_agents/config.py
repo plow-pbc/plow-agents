@@ -29,7 +29,7 @@ class Config:
 
     def need_image(self) -> str:
         if not self.image:
-            die(f"no image in {self.path} -- set `image = \"ghcr.io/you/agent\"` or pass --image")
+            die(f"no image in {self.path} -- set `image = \"ghcr.io/you/plow-agents\"` or pass --image")
         return self.image
 
     def need_slug(self) -> str:

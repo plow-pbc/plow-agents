@@ -12,7 +12,7 @@ a real phone line. This repo is the image.
   It is not on PyPI. That puts `plow-agents` on your `PATH`.
 - **Docker**, for building and checking the image.
 - **A public registry you can push to** — ghcr.io under this repo is the default. A Docker Hub
-  image is written with its host: `docker.io/you/my-agent`.
+  image is written with its host: `docker.io/you/plow-agents`.
 
 You do not need `gh` or a Python of your own.
 
@@ -21,8 +21,8 @@ You do not need `gh` or a Python of your own.
 Open `plow-agents.toml` and fill in both fields:
 
 ```toml
-slug  = "my-agent"
-image = "ghcr.io/you/my-agent"
+slug  = "plow-agents"
+image = "ghcr.io/you/plow-agents"
 ```
 
 `slug` is the name your listing claims on the Agent Index. `image` is the

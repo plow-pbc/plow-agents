@@ -27,7 +27,7 @@ sys.path.insert(0, SRC)
 
 from plow_agents import api, cli, config, images  # noqa: E402
 
-IMAGE = "ghcr.io/plow-pbc/reference"
+IMAGE = "ghcr.io/you/plow-agents"
 SHA = "sha256:" + "ab" * 32
 FREE, HELD = "ln_free", "ln_held"
 
@@ -95,10 +95,10 @@ class Registry:
             if not self.public:
                 return httpx.Response(403, json={"errors": [{"code": "DENIED"}]})
             return httpx.Response(200, json={"token": "anonymous"})
-        if request.url.path == f"/v2/plow-pbc/reference/manifests/{SHA}" or request.url.path.startswith("/v2/plow-pbc/reference/manifests/"):
+        if request.url.path == f"/v2/you/plow-agents/manifests/{SHA}" or request.url.path.startswith("/v2/you/plow-agents/manifests/"):
             if request.headers.get("Authorization") != "Bearer anonymous":
                 return httpx.Response(401, headers={"WWW-Authenticate":
-                    'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:plow-pbc/reference:pull"'})
+                    'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:you/plow-agents:pull"'})
             if self.manifest_status != 200:
                 return httpx.Response(self.manifest_status)
             return httpx.Response(200, headers={"Content-Type": self.media}, content=b"{}")
@@ -167,10 +167,10 @@ def main() -> int:
         toml = os.path.join(work, config.CONFIG_FILE)
 
         # --- plow-agents.toml: the unit of identity -------------------------
-        code, _, _ = run("init", "--slug", "reference", "--image", IMAGE, cwd=work, base=base, token=token)
+        code, _, _ = run("init", "--slug", "plow-agents", "--image", IMAGE, cwd=work, base=base, token=token)
         check("init writes a repo, plow-agents.toml included",
               (code, os.path.isfile(toml), os.path.isfile(os.path.join(work, "agent.py"))), (0, True, True))
-        check("toml read gives slug and image", (config.load(work).slug, config.load(work).image), ("reference", IMAGE))
+        check("toml read gives slug and image", (config.load(work).slug, config.load(work).image), ("plow-agents", IMAGE))
         check("toml has no digest before a push", config.load(work).last_pushed, "")
         check("--image overrides the toml without writing it",
               (config.load(work, image="ghcr.io/other/x").image, config.load(work).image), ("ghcr.io/other/x", IMAGE))
@@ -215,14 +215,14 @@ def main() -> int:
         check("push pushes the tag, and runs no other docker command", docker.argvs, [["docker", "push", f"{IMAGE}:latest"]])
         check("push asks the registry for the pushed digest, is challenged, takes the anonymous token, and asks again",
               [(request.method, request.url.path) for request in registry.requests],
-              [("GET", f"/v2/plow-pbc/reference/manifests/{SHA}"), ("GET", "/token"), ("GET", f"/v2/plow-pbc/reference/manifests/{SHA}")])
+              [("GET", f"/v2/you/plow-agents/manifests/{SHA}"), ("GET", "/token"), ("GET", f"/v2/you/plow-agents/manifests/{SHA}")])
         check("and the token request carries the challenge's scope and no credentials",
               (dict(registry.requests[1].url.params), "Authorization" in registry.requests[1].headers),
-              ({"service": "ghcr.io", "scope": "repository:plow-pbc/reference:pull"}, False))
+              ({"service": "ghcr.io", "scope": "repository:you/plow-agents:pull"}, False))
         check("push prints the digest-pinned reference", out.strip(), f"{IMAGE}@{SHA}")
         check("push records last_pushed in the toml", config.load(work).last_pushed, SHA)
         with open(toml) as handle:
-            check("and leaves the other keys alone", 'slug = "reference"' in handle.read(), True)
+            check("and leaves the other keys alone", 'slug = "plow-agents"' in handle.read(), True)
 
         other = "sha256:" + "ef" * 32
         for label, registry, words in (
@@ -263,7 +263,7 @@ def main() -> int:
         code, out, err = run("deploy", cwd=work, base=base, token=token)
         check("deploy exits 0", code, 0)
         check("deploy sends the digest-pinned image as the provider", Stub.created[-1],
-              {"name": "reference", "line_uid": FREE, "provider": f"exe:{IMAGE}@{SHA}"})
+              {"name": "plow-agents", "line_uid": FREE, "provider": f"exe:{IMAGE}@{SHA}"})
         check("deploy prints the line and the reference it asked for", out.strip().split("\t"), ["agt_new", FREE, f"{IMAGE}@{SHA}"])
         check("deploy says requested, not deployed, and names the phase", ("Requested agent agt_new" in err, "provisioning" in err), (True, True))
         check("deploy does not claim the agent is up", "Deployed" in err, False)
