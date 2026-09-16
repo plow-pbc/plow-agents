@@ -580,12 +580,9 @@ def deploy(args: argparse.Namespace) -> None:
             repository = project_image(repository)
             provider = f"exe:{repository}@{digest}"
             name = image_repository(repository).rsplit("/", 1)[-1]
-    token = account_token(args)
     if not args.line:
-        free = [row["uid"] for row in pool_lines(args.api_base, token) if not row["agent_uid"]]
-        if len(free) != 1:
-            die("pass --line with a free line from `plow-agents lines`")
-        args.line = free[0]
+        die("deploy requires --line; choose a free line from `plow-agents lines`")
+    token = account_token(args)
     if args.local:
         args.credential_file = CREDENTIAL_FILE
         mint(args)
@@ -656,7 +653,7 @@ def main() -> int:
 
     it = verbs.add_parser("deploy", help="request an agent on a line")
     it.add_argument("target", nargs="?", help="image@sha256:... or exe:<slug>")
-    it.add_argument("--line", help="line uid (default: the only free line)")
+    it.add_argument("--line", help="required line uid, as printed by `lines`")
     it.add_argument("--local", action="store_true", help="mint a credential and start this Compose project")
     it.add_argument("--agent-api-base", default=None, help="with --local, the API root the container reaches (default: --api-base)")
     it.set_defaults(run=deploy)

@@ -135,8 +135,8 @@ plow-agents profile --show
 | `plow-agents revoke [LINE] [--credential-file PATH]` | Retire any agent on LINE, or the credential-file self-hosted agent. |
 | `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
 | `plow-agents image push [IMAGE]` | Push and print the full image reference. |
-| `plow-agents deploy TARGET [--line LINE]` | Request an image@sha256:… or an `exe:slug` listing. |
-| `plow-agents deploy --local [--line LINE] [--agent-api-base URL]` | Mint a credential and start Compose locally. |
+| `plow-agents deploy TARGET --line LINE` | Request an image@sha256:… or an `exe:slug` listing. |
+| `plow-agents deploy --local --line LINE [--agent-api-base URL]` | Mint a credential and start Compose locally. |
 | `plow-agents agents` | Show tab-separated line, target, and status. |
 
 Every command accepts `--help`. Global `--api-base URL` and `--token-file PATH`

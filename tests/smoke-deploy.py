@@ -58,8 +58,6 @@ class Smoke(unittest.TestCase):
         self.requests.append(req)
         url = req.full_url
         self.assertEqual(req.get_header("Authorization"), "Bearer synthetic-account")
-        if url.endswith("/v1/chats"):
-            return Response({"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": "ln_free"}}]}]})
         if url.endswith("/v1/lines"):
             return Response({"data": [{"uid": "ln_free", "agent_uid": None}]})
         if req.method == "POST":
@@ -228,12 +226,22 @@ class Smoke(unittest.TestCase):
                 self.assertFalse(self.commands)
                 self.assertFalse(Path("plow-credentials").exists())
 
+    def test_deploy_requires_an_explicit_line(self):
+        Path(".dockerignore").write_text("plow-credentials\n")
+        for target in ("exe:hermes", "--local"):
+            with self.subTest(target=target):
+                self.run_cli("deploy", target, success=False,
+                             expected_error="plow-agents: deploy requires --line; choose a free line from `plow-agents lines`")
+                self.assertFalse(self.requests)
+                self.assertFalse(self.commands)
+                self.assertFalse(Path("plow-credentials").exists())
+
     def test_deploy_local(self):
         Path(".dockerignore").write_text("plow-credentials\n")
         fixture = Path("tests/__pycache__/test_plow_init.cpython-311.pyc")
         fixture.parent.mkdir(parents=True)
         fixture.write_bytes(b"\x00\nPLOW_AGENT_TOKEN=synthetic-fixture\n")
-        self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
+        self.run_cli("deploy", "--local", "--line", "ln_free", "--agent-api-base", "http://host.docker.internal:8000/v1")
         self.assertIn("PLOW_API_BASE=http://host.docker.internal:8000\n", Path("plow-credentials").read_text())
         self.assertEqual(self.commands, [["docker", "compose", "up", "--build", "-d"]])
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
@@ -247,7 +255,7 @@ class Smoke(unittest.TestCase):
     def test_local_startup_failure_preserves_agent_and_credential(self):
         Path(".dockerignore").write_text("plow-credentials\n")
         self.fail_up = True
-        _, err = self.run_cli("deploy", "--local", success=False,
+        _, err = self.run_cli("deploy", "--local", "--line", "ln_free", success=False,
                               expected_error="plow-agents: docker compose up --build -d failed (1)")
         self.assertIn("compose startup failed: fixture error", err)
         self.assertFalse(self.deleted)
