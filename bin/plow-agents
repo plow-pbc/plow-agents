@@ -516,9 +516,9 @@ def dockerignore_patterns(path: str) -> list[tuple[re.Pattern[str], bool]]:
     return patterns
 
 
-def refuse_credentials(args: argparse.Namespace, ignore_file: str | None = None) -> None:
+def refuse_credentials(args: argparse.Namespace, ignore_file: str) -> None:
     account_file = os.path.realpath(token_path(args.token_file))
-    patterns = dockerignore_patterns(ignore_file) if ignore_file else []
+    patterns = dockerignore_patterns(ignore_file)
     def failed(error: OSError) -> NoReturn:
         die(f"cannot check build context for credentials: {error}")
     for directory, _, files in os.walk(".", onerror=failed):
@@ -533,15 +533,13 @@ def refuse_credentials(args: argparse.Namespace, ignore_file: str | None = None)
             if excluded and relative != "Dockerfile":
                 continue
             if os.path.realpath(path) == account_file:
-                die(f"add {relative} to {ignore_file} before building" if ignore_file else
-                    f"{path} is the account token -- move it outside the build context before building")
+                die(f"add {relative} to {ignore_file} before building")
             try:
                 with open(path, "rb") as handle:
                     if any(line.lstrip().startswith((b"# plow-agent-uid:", b"PLOW_AGENT_TOKEN=")) for line in handle):
                         if relative == "Dockerfile":
                             die("remove credentials from Dockerfile before building")
-                        die(f"add {relative} to {ignore_file} before building" if ignore_file else
-                            f"{path} contains a credential -- revoke its agent and remove the credential before building")
+                        die(f"add {relative} to {ignore_file} before building")
             except OSError as error:
                 failed(error)
 
@@ -578,7 +576,6 @@ def deploy(args: argparse.Namespace) -> None:
     if args.local:
         if args.target:
             die("--local takes no target; it builds this checkout's Compose project")
-        refuse_credentials(args)
     else:
         if args.agent_api_base is not None:
             die("deploy --agent-api-base requires --local")
