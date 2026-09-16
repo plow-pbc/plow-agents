@@ -31,6 +31,9 @@ import urllib.request
 SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, SRC)
 
+from websockets.datastructures import Headers  # noqa: E402
+from websockets.exceptions import InvalidStatus  # noqa: E402
+from websockets.http11 import Response  # noqa: E402
 from websockets.sync.client import connect  # noqa: E402
 
 from plow_agents import check, stub, template  # noqa: E402
@@ -266,6 +269,9 @@ def main() -> int:
     exec(compile(sources["agent.py"], "agent.py", "exec"), agent)  # noqa: S102 -- our own file, read above
     check_that("the reference agent refuses to start without PLOW_API_BASE", _refuses(agent["read_environment"]), True)
     check_that("and needs nothing else", agent["read_environment"]({"PLOW_API_BASE": "http://x/"}), ("http://x", None))
+    refused = [InvalidStatus(Response(status, "", Headers())) for status in (503, 401)]
+    check_that("a WebSocket upgrade refused 5xx is retried, and one refused 4xx is not",
+               [agent["transient"](error) for error in refused], [True, False])
 
     # --- a peer that does not know the realm cannot satisfy the assertion ---
     with stub.Stub(host="127.0.0.1") as local:

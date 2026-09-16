@@ -358,7 +358,6 @@ def image_check(
     ctx: typer.Context,
     image: Annotated[str | None, typer.Option("--image", help="override the image in plow-agents.toml")] = None,
     tag: Annotated[str, typer.Option("--tag", help="the tag to check; the one `image build` wrote")] = images.DEFAULT_TAG,
-    timeout: Annotated[float, typer.Option("--timeout", help="seconds to allow the agent to boot and answer")] = contract.BOOT_TIMEOUT_S,
 ) -> None:
     """Run the built image the way exe.dev would: fail on the contract, warn on the advice."""
     this = state(ctx)
@@ -366,7 +365,7 @@ def image_check(
     reference = f"{settings.need_image()}:{tag}"
     log(f"Checking {reference} against the cloud-agent contract.")
     try:
-        passed, warned = contract.check(this.docker, image=reference, timeout=timeout)
+        passed, warned = contract.check(this.docker, image=reference)
     except contract.ContractError as failure:
         # The first failing assertion and nothing after it: a container that
         # never reached the API has nothing to say about whether it would

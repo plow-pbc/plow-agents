@@ -383,7 +383,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `profile [--name] [--photo] [--show]` | Set or show your public profile. |
 | `init [--slug] [--image] [DIR]` | Start an agent repo: reference agent, Dockerfile, Action, toml. |
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
-| `image check [--image] [--tag] [--timeout]` | Run the built image as exe.dev will: fail on the contract, warn on the advice. |
+| `image check [--image] [--tag]` | Run the built image as exe.dev will: fail on the contract, warn on the advice. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [TARGET] [--line]` | Run `image@sha256:…` or `exe:<slug>` (default `last_pushed`) on one of your lines, on exe.dev. |
 | `deploy --local [--line]` | `docker compose build`, then `mint`, then `docker compose up --no-build -d` on this checkout's `compose.yml`. |

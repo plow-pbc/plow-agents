@@ -109,10 +109,13 @@ def transient(error: Exception) -> bool:
 
     An HTTP 4xx is Plow answering -- a revoked token, a deleted chat -- and
     asking again gets the same answer. Retrying those would hide the one thing
-    the log needs to say, so they raise.
+    the log needs to say, so they raise. A 5xx is Plow not answering, whether
+    it arrives on a request or as a refused WebSocket upgrade.
     """
     if isinstance(error, urllib.error.HTTPError):
         return error.code >= 500
+    if isinstance(error, websockets.exceptions.InvalidStatus):
+        return error.response.status_code >= 500
     return isinstance(error, (OSError, websockets.exceptions.ConnectionClosed))
 
 
