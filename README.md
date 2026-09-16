@@ -130,7 +130,7 @@ plow-agents profile --show
 | `plow-agents profile [--name NAME] [--photo PHOTO] [--show]` | Set or show your profile; a photo can be a file or HTTPS URL. |
 | `plow-agents mint LINE [--credential-file PATH] [--agent-api-base URL]` | Write a credential for a self-hosted agent. |
 | `plow-agents rotate [--credential-file PATH]` | Replace the credential; recreate the container to load it. |
-| `plow-agents revoke [LINE] [--credential-file PATH]` | Retire a self-hosted agent. |
+| `plow-agents revoke [LINE] [--credential-file PATH]` | Retire any agent on LINE, or the credential-file self-hosted agent. |
 | `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
 | `plow-agents image push [IMAGE]` | Push and print the full image reference. |
 | `plow-agents deploy TARGET [--line LINE]` | Request an image@sha256:… or an `exe:slug` listing. |
