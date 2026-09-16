@@ -212,6 +212,9 @@ def main() -> int:
             code, _, err = run("image", "build", cwd=credentialled, base=base, token=token, docker=docker)
             check(f"build refuses a directory {label} it, naming the file, and docker never sees it",
                   (code != 0, os.path.join(where, "plow-credentials") in err, docker.argvs), (True, True, []))
+            # The remedy has to name where `revoke` will find that credential.
+            holder = os.path.realpath(os.path.join(credentialled, where))
+            check(f"and points revoke at the directory {label} it", f"`plow-agents revoke` in {holder}" in err, True)
 
         for written, want in (("ghcr.io/you/agent", ("ghcr.io", "you/agent")),
                               ("docker.io/you/agent", ("registry-1.docker.io", "you/agent")),

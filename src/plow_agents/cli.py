@@ -406,8 +406,9 @@ def _refuse_credential_in() -> None:
     for directory, _, names in os.walk("."):
         if CREDENTIAL_FILE in names:
             credential = os.path.abspath(os.path.join(directory, CREDENTIAL_FILE))
-            die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
-                "have confirmed whose it is, before building an image from this directory")
+            die(f"{credential} already exists -- retire that agent by running `plow-agents revoke` in "
+                f"{os.path.dirname(credential)}, or remove the file once you have confirmed whose it is, "
+                "before building an image from this directory")
 
 
 def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: str | None) -> None:
