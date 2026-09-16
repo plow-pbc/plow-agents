@@ -61,9 +61,8 @@ docker login ghcr.io
 plow-agents image push
 ```
 
-Make the package public in your registry. If the public pull check fails on the first
-push, change the package's visibility and run `plow-agents image push` again.
-The command prints the image's digest and records `last_pushed` in the project file.
+The command prints the full `repository@sha256:…` reference and records it as
+`last_pushed` in the project file.
 
 ## 5. Request an agent
 
@@ -74,7 +73,7 @@ plow-agents deploy --line ln_xxx
 plow-agents agents
 ```
 
-`deploy` uses the digest recorded by `image push`. You can also pass an
+`deploy` uses the image reference recorded by `image push`. You can also pass an
 `image@sha256:…` reference or a `sha256:…` digest of the configured image.
 If your account has exactly one free line, `plow-agents deploy` selects it.
 
@@ -95,7 +94,8 @@ plow-agents deploy --local --line ln_xxx
 docker compose logs -f
 ```
 
-When finished:
+If the container reaches your API at a different address, pass
+`--agent-api-base URL` to `plow-agents deploy --local`. When finished:
 
 ```sh
 plow-agents revoke
@@ -113,9 +113,9 @@ docker compose down -v
 | `plow-agents rotate [--credential-file PATH]` | Replace the credential; recreate the container to load it. |
 | `plow-agents revoke [LINE] [--credential-file PATH]` | Retire a self-hosted agent. |
 | `plow-agents image build` | Build the current directory for linux/amd64. |
-| `plow-agents image push` | Push, verify anonymous access, and record the digest. |
+| `plow-agents image push` | Push and record the full image reference. |
 | `plow-agents deploy [TARGET] [--line LINE]` | Request the saved digest, a supplied digest, or an `exe:slug` listing. |
-| `plow-agents deploy --local [--line LINE]` | Build, mint, and start Compose locally. |
+| `plow-agents deploy --local [--line LINE] [--agent-api-base URL]` | Build, mint, and start Compose locally. |
 | `plow-agents agents` | Show tab-separated line, target, and status. |
 
 Every command accepts `--help`. Global `--api-base URL` and `--token-file PATH`
@@ -123,7 +123,7 @@ options go before the command.
 
 ## Worth knowing
 
-- Builds refuse any `plow-credentials` under the current directory, even if ignored by Docker.
+- The registry package must be public; private images fail to deploy with `failed(pull_failed)`.
 
 ## License
 

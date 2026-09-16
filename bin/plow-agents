@@ -38,10 +38,6 @@ CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
 CONFIG_FILE = "plow-agents.toml"
 DIGEST = r"sha256:[0-9a-f]{64}"
-MANIFEST_TYPES = (
-    "application/vnd.oci.image.manifest.v1+json",
-    "application/vnd.docker.distribution.manifest.v2+json",
-)
 # Plow caps a profile photo at 5 MB and takes these four formats. Restated
 # here only to refuse a file before any request is sent; the server decides.
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
@@ -494,9 +490,15 @@ def image_repository(image: str) -> str:
 def refuse_credentials() -> None:
     def failed(error: OSError) -> NoReturn:
         die(f"cannot check build context for credentials: {error}")
-    for directory, dirs, files in os.walk(".", onerror=failed):
-        if CREDENTIAL_FILE in dirs or CREDENTIAL_FILE in files:
-            die(f"{os.path.join(directory, CREDENTIAL_FILE)} exists -- revoke its agent and remove the credential before building")
+    for directory, _, files in os.walk(".", onerror=failed):
+        for filename in files:
+            path = os.path.join(directory, filename)
+            try:
+                with open(path, "rb") as handle:
+                    if any(line.lstrip().startswith((b"# plow-agent-uid:", b"PLOW_AGENT_TOKEN=")) for line in handle):
+                        die(f"{path} contains a credential -- revoke its agent and remove the credential before building")
+            except OSError as error:
+                failed(error)
 
 
 def docker(*arguments: str) -> str:
@@ -512,62 +514,6 @@ def docker(*arguments: str) -> str:
     return result.stdout
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def verify_public(repository: str, digest: str) -> None:
-    host, name = repository.split("/", 1)
-    if host == "docker.io":
-        host = "registry-1.docker.io"
-        name = name if "/" in name else f"library/{name}"
-    url = f"https://{host}/v2/{name}/manifests/{digest}"
-    # A fresh opener uses neither Docker credentials nor a globally installed
-    # auth handler. Redirects cannot move the anonymous token to another host.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-
-    def get(url: str, headers: dict[str, str]):
-        try:
-            return opener.open(urllib.request.Request(url, headers=headers), timeout=30)
-        except urllib.error.HTTPError as error:
-            return error
-        except OSError as error:
-            die(f"cannot verify public image: {error}")
-
-    headers = {"Accept": ", ".join((*MANIFEST_TYPES, "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"))}
-    with get(url, headers) as response:
-        status, challenge, raw = response.code, response.headers.get("WWW-Authenticate", ""), response.read()
-    if status == 401:
-        scheme, _, parameters = challenge.partition(" ")
-        fields = urllib.request.parse_keqv_list(urllib.request.parse_http_list(parameters))
-        realm = fields.get("realm", "")
-        parsed = urllib.parse.urlsplit(realm)
-        allowed = urllib.parse.urlsplit(f"https://{'auth.docker.io' if host == 'registry-1.docker.io' else host}")
-        if scheme.lower() != "bearer" or parsed.scheme != "https" or parsed.username or parsed.password or (parsed.hostname, parsed.port or 443) != (allowed.hostname, allowed.port or 443):
-            die("registry token challenge must use HTTPS on the registry host (auth.docker.io for Docker Hub)")
-        query = urllib.parse.parse_qsl(parsed.query) + [("scope", f"repository:{name}:pull")]
-        if fields.get("service"):
-            query.append(("service", fields["service"]))
-        token_url = urllib.parse.urlunsplit(parsed._replace(query=urllib.parse.urlencode(query)))
-        with get(token_url, {}) as response:
-            if response.code != 200:
-                die(f"anonymous registry token request answered HTTP {response.code}")
-            token = json.load(response)
-        bearer = token.get("token") or token.get("access_token")
-        if not bearer:
-            die("registry returned no anonymous pull token")
-        with get(url, {**headers, "Authorization": f"Bearer {bearer}"}) as response:
-            status, raw = response.code, response.read()
-    if status != 200:
-        die(f"anonymous pull answered HTTP {status} -- make the package public and push again")
-    manifest = json.loads(raw)
-    if "manifests" in manifest:
-        die("multi-architecture indexes are not supported -- build for linux/amd64 alone")
-    if manifest.get("mediaType") not in MANIFEST_TYPES:
-        die("registry did not return a single image manifest")
-
-
 def image_build(args: argparse.Namespace) -> None:
     refuse_credentials()
     docker("build", "--platform", "linux/amd64", "--tag", project_image(project()), ".")
@@ -581,11 +527,9 @@ def image_push(args: argparse.Namespace) -> None:
         die("docker push printed no sha256 digest")
     digest = found[-1]
     repository = image_repository(image)
-    verify_public(repository, digest)
-    settings["last_pushed"] = digest
-    with open(CONFIG_FILE, "w") as handle:
-        handle.writelines(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in settings.items())
-    print(f"{repository}@{digest}")
+    settings["last_pushed"] = f"{repository}@{digest}"
+    write_private(CONFIG_FILE, "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in settings.items()))
+    print(settings["last_pushed"])
 
 
 def deploy(args: argparse.Namespace) -> None:
@@ -594,6 +538,8 @@ def deploy(args: argparse.Namespace) -> None:
             die("--local takes no target; it builds this checkout's Compose project")
         refuse_credentials()
     else:
+        if args.agent_api_base is not None:
+            die("deploy --agent-api-base requires --local")
         settings = project()
         target = args.target or settings.get("last_pushed", "")
         if target.startswith("exe:"):
@@ -618,7 +564,7 @@ def deploy(args: argparse.Namespace) -> None:
         args.line = free[0]
     if args.local:
         docker("compose", "build")
-        args.credential_file, args.agent_api_base = CREDENTIAL_FILE, args.api_base
+        args.credential_file = CREDENTIAL_FILE
         mint(args)
         try:
             docker("compose", "up", "--no-build", "-d")
@@ -684,12 +630,13 @@ def main() -> int:
     it = verbs.add_parser("image", help="build or push this project's image")
     images = it.add_subparsers(dest="image_verb", required=True)
     images.add_parser("build", help="build for linux/amd64").set_defaults(run=image_build)
-    images.add_parser("push", help="push and verify public pull access").set_defaults(run=image_push)
+    images.add_parser("push", help="push and record the image reference").set_defaults(run=image_push)
 
     it = verbs.add_parser("deploy", help="request an agent on a line")
     it.add_argument("target", nargs="?", help="image@sha256:..., sha256:..., or exe:<slug> (default: last_pushed)")
     it.add_argument("--line", help="line uid (default: the only free line)")
     it.add_argument("--local", action="store_true", help="build, mint, and start this Compose project")
+    it.add_argument("--agent-api-base", default=None, help="with --local, the API root the container reaches (default: --api-base)")
     it.set_defaults(run=deploy)
     verbs.add_parser("agents", help="list agent targets and status").set_defaults(run=agents)
 
@@ -704,7 +651,7 @@ def main() -> int:
     # `--api-base` is where *this tool* calls; the credential says where the
     # *container* calls. The same address usually, but not against a local
     # stack: a 127.0.0.1 that works out here is the container's own loopback.
-    if args.verb == "mint":
+    if args.verb == "mint" or (args.verb == "deploy" and args.local):
         args.agent_api_base = strip_v1(args.agent_api_base) if args.agent_api_base is not None else args.api_base
     args.run(args)
     return 0

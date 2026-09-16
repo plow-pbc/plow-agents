@@ -20,10 +20,9 @@ IMAGE = "ghcr.io/example/agent"
 
 
 class Response(io.BytesIO):
-    def __init__(self, body, code=200, headers=None):
+    def __init__(self, body, code=200):
         super().__init__(json.dumps(body).encode())
-        self.code = self.status = code
-        self.headers = headers or {}
+        self.status = code
 
 
 class Smoke(unittest.TestCase):
@@ -40,9 +39,6 @@ class Smoke(unittest.TestCase):
         self.fail_revoke = False
         self.fail_up = False
         self.fail_build = False
-        self.private = False
-        self.manifest = {"mediaType": "application/vnd.oci.image.manifest.v1+json"}
-        self.realm = "https://ghcr.io/token"
         self.created = []
         self.deleted = []
         self.docker_patch = patch("subprocess.run", side_effect=self.docker)
@@ -64,15 +60,6 @@ class Smoke(unittest.TestCase):
     def http(self, req, *args, **kwargs):
         self.requests.append(req)
         url = req.full_url
-        if "/manifests/" in url:
-            if not req.get_header("Authorization"):
-                return Response({}, 401, {"WWW-Authenticate": f'Bearer realm="{self.realm}",service="registry"'})
-            self.assertEqual(req.get_header("Authorization"), "Bearer anonymous")
-            return Response(self.manifest, 403 if self.private else 200)
-        if "/token?" in url:
-            self.assertIsNone(req.get_header("Authorization"))
-            self.assertIn("scope=repository%3A", url)
-            return Response({"token": "anonymous"})
         self.assertEqual(req.get_header("Authorization"), "Bearer synthetic-account")
         if url.endswith("/v1/chats"):
             return Response({"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": "ln_free"}}]}]})
@@ -107,40 +94,29 @@ class Smoke(unittest.TestCase):
         self.run_cli("image", "build")
         self.assertEqual(self.commands, [["docker", "build", "--platform", "linux/amd64", "--tag", IMAGE + ":v1", "."]])
         Path("nested").mkdir()
-        Path("nested/plow-credentials").write_text("secret")
-        self.commands.clear()
-        self.run_cli("image", "build", success=False)
-        self.run_cli("deploy", "--local", success=False)
-        self.assertFalse(self.commands)
-        self.assertFalse(self.requests)
+        for credential in ("# plow-agent-uid: agt_test\n", "PLOW_AGENT_TOKEN=synthetic-agent\n"):
+            Path("nested/custom.env").write_text(credential)
+            self.commands.clear()
+            self.run_cli("image", "build", success=False)
+            self.run_cli("deploy", "--local", success=False)
+            self.assertFalse(self.commands)
+            self.assertFalse(self.requests)
 
     def test_image_push(self):
         out, _ = self.run_cli("image", "push")
         self.assertEqual(out.strip(), f"{IMAGE}@{DIGEST}")
-        self.assertEqual(tomllib.loads(Path("plow-agents.toml").read_text())["last_pushed"], DIGEST)
+        self.assertEqual(tomllib.loads(Path("plow-agents.toml").read_text())["last_pushed"], f"{IMAGE}@{DIGEST}")
         self.assertEqual(self.commands, [["docker", "push", IMAGE + ":v1"]])
-        self.assertIsNone(self.requests[0].get_header("Authorization"))
-        self.private = True
-        Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\n')
-        self.run_cli("image", "push", success=False)
-        self.assertNotIn("last_pushed", Path("plow-agents.toml").read_text())
-        self.private = False
-        self.manifest = {"manifests": []}
-        Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\n')
-        self.run_cli("image", "push", success=False)
-        self.assertNotIn("last_pushed", Path("plow-agents.toml").read_text())
-        for realm in ("http://ghcr.io/token", "https://other.example/token"):
-            self.realm = realm
-            self.requests.clear()
-            self.run_cli("image", "push", success=False)
-            self.assertEqual(len(self.requests), 1)
-        self.realm = "https://auth.docker.io/token"
-        self.manifest = {"mediaType": "application/vnd.oci.image.manifest.v1+json"}
-        Path("plow-agents.toml").write_text('image = "docker.io/example/agent:v1"\n')
-        self.requests.clear()
-        self.run_cli("image", "push")
-        self.assertIn("https://registry-1.docker.io/v2/example/agent/manifests/", self.requests[0].full_url)
-        self.assertTrue(self.requests[1].full_url.startswith(self.realm))
+        self.assertFalse(self.requests)
+
+    def test_failed_push_record_preserves_project(self):
+        config = Path("plow-agents.toml")
+        original = config.read_bytes()
+        with patch("os.replace", side_effect=OSError("replacement failed")):
+            with self.assertRaisesRegex(OSError, "replacement failed"):
+                self.run_cli("image", "push")
+        self.assertEqual(config.read_bytes(), original)
+        self.assertEqual(sorted(p.name for p in Path(".").iterdir()), ["plow-agents.toml", "token"])
 
     def test_deploy(self):
         for target in (f"{IMAGE}@{DIGEST}", DIGEST, "exe:hermes"):
@@ -149,6 +125,8 @@ class Smoke(unittest.TestCase):
             self.assertEqual(self.created[-1]["provider"], target if target.startswith("exe:") else f"exe:{IMAGE}@{DIGEST}")
             self.assertEqual(self.created[-1]["line_uid"], "ln_free")
         self.run_cli("image", "push")
+        config = Path("plow-agents.toml")
+        config.write_text(config.read_text().replace(IMAGE + ":v1", "ghcr.io/example/other:v2"))
         self.run_cli("deploy", "--line", "ln_explicit")
         self.assertEqual(self.created[-1], {"name": "agent", "line_uid": "ln_explicit", "provider": f"exe:{IMAGE}@{DIGEST}"})
         self.created.clear()
@@ -162,7 +140,8 @@ class Smoke(unittest.TestCase):
         self.assertFalse(Path("plow-credentials").exists())
         self.fail_build = False
         self.commands.clear()
-        self.run_cli("deploy", "--local")
+        self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
+        self.assertIn("PLOW_API_BASE=http://host.docker.internal:8000\n", Path("plow-credentials").read_text())
         self.assertEqual(self.commands, [["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
         Path("plow-credentials").unlink()
