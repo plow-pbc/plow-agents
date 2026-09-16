@@ -109,6 +109,47 @@ class Smoke(unittest.TestCase):
             self.assertFalse(self.commands)
             self.assertFalse(self.requests)
 
+    def test_build_honors_dockerignore(self):
+        credential = Path("plow-credentials")
+        credential.write_text("PLOW_AGENT_TOKEN=synthetic-agent\n")
+        cases = [
+            (None, False), ("# plow-credentials\n", False),
+            ("/plow-credentials\n", True), ("./plow-credentials/\n", True),
+            ("plow-*\n", True), ("**/plow-credentials\n", True),
+            ("plow-credential?\n", True), ("plow-credential[s]\n", True),
+            ("plow-*\n!plow-credentials\n", False),
+            ("*\n!plow-*\nplow-credentials\n", True),
+        ]
+        for rules, excluded in cases:
+            with self.subTest(rules=rules):
+                if rules is not None:
+                    Path(".dockerignore").write_text(rules)
+                self.commands.clear()
+                self.run_cli("image", "build", success=excluded, expected_error=None if excluded else
+                             "plow-agents: add plow-credentials to .dockerignore before building")
+                self.assertEqual(bool(self.commands), excluded)
+                self.assertEqual(credential.read_text(), "PLOW_AGENT_TOKEN=synthetic-agent\n")
+        Path("Dockerfile.dockerignore").write_text("")
+        self.commands.clear()
+        self.run_cli("image", "build", success=False,
+                     expected_error="plow-agents: add plow-credentials to Dockerfile.dockerignore before building")
+        self.assertFalse(self.commands)
+        Path("Dockerfile.dockerignore").write_text("plow-credentials\n")
+        self.run_cli("image", "build")
+
+    def test_build_ignores_nested_credentials_and_account_token(self):
+        Path("nested").mkdir()
+        Path("nested/custom.env").write_text("# plow-agent-uid: agt_test\n")
+        self.token_file = str(Path("nested/token").resolve())
+        Path(self.token_file).write_text("synthetic-account")
+        Path(".dockerignore").write_text("nested/\n")
+        self.run_cli("image", "build")
+        self.commands.clear()
+        Path(".dockerignore").write_text("nested/\n!nested/token\n")
+        self.run_cli("image", "build", success=False,
+                     expected_error="plow-agents: add nested/token to .dockerignore before building")
+        self.assertFalse(self.commands)
+
     def test_account_token_in_build_context(self):
         Path("nested/plow").mkdir(parents=True)
         account_file = Path("nested/plow/token").resolve()

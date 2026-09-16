@@ -490,19 +490,62 @@ def image_repository(image: str) -> str:
     return f"{host}/{name.rsplit(':', 1)[0]}"
 
 
-def refuse_credentials(args: argparse.Namespace) -> None:
+def dockerignore_patterns(path: str) -> list[tuple[re.Pattern[str], bool]]:
+    try:
+        with open(path, encoding="utf-8-sig") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return []
+    patterns = []
+    for line in lines:
+        if line.startswith("#") or not line.strip():
+            continue
+        pattern = line.strip()
+        exclude = not pattern.startswith("!")
+        pattern = os.path.normpath(pattern if exclude else pattern[1:].strip()).strip("/")
+        if pattern == ".":
+            continue
+        # Docker globs are rooted, match parent directories, and apply in order.
+        tokens = re.findall(r"\\.|\*\*/?|\[(?:\\.|[^\\\]])*\]|.", pattern)
+        expression = ""
+        for index, token in enumerate(tokens):
+            if token.startswith("**"):
+                expression += ".*" if index == len(tokens) - 1 else "(?:.*/)?"
+            elif token == "*":
+                expression += "[^/]*"
+            elif token == "?":
+                expression += "[^/]"
+            elif token.startswith("["):
+                expression += "(?!/)" + token
+            else:
+                expression += re.escape(token[1:] if token.startswith("\\") else token)
+        patterns.append((re.compile(expression + r"(?:/.*)?\Z", re.DOTALL), exclude))
+    return patterns
+
+
+def refuse_credentials(args: argparse.Namespace, ignore_file: str | None = None) -> None:
     account_file = os.path.realpath(token_path(args.token_file))
+    patterns = dockerignore_patterns(ignore_file) if ignore_file else []
     def failed(error: OSError) -> NoReturn:
         die(f"cannot check build context for credentials: {error}")
     for directory, _, files in os.walk(".", onerror=failed):
         for filename in files:
             path = os.path.join(directory, filename)
+            relative = os.path.relpath(path)
+            excluded = False
+            for pattern, exclude in patterns:
+                if pattern.match(relative):
+                    excluded = exclude
+            if excluded:
+                continue
             if os.path.realpath(path) == account_file:
-                die(f"{path} is the account token -- move it outside the build context before building")
+                die(f"add {relative} to {ignore_file} before building" if ignore_file else
+                    f"{path} is the account token -- move it outside the build context before building")
             try:
                 with open(path, "rb") as handle:
                     if any(line.lstrip().startswith((b"# plow-agent-uid:", b"PLOW_AGENT_TOKEN=")) for line in handle):
-                        die(f"{path} contains a credential -- revoke its agent and remove the credential before building")
+                        die(f"add {relative} to {ignore_file} before building" if ignore_file else
+                            f"{path} contains a credential -- revoke its agent and remove the credential before building")
             except OSError as error:
                 failed(error)
 
@@ -523,7 +566,7 @@ def docker(*arguments: str, quiet: bool = False) -> str:
 
 def image_build(args: argparse.Namespace) -> None:
     image = project_image(args.image)
-    refuse_credentials(args)
+    refuse_credentials(args, "Dockerfile.dockerignore" if os.path.exists("Dockerfile.dockerignore") else ".dockerignore")
     docker("build", "--platform", "linux/amd64", "--tag", image, ".")
 
 
