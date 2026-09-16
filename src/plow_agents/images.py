@@ -26,10 +26,10 @@ INDEX_TYPES = ("application/vnd.oci.image.index.v1+json", "application/vnd.docke
 TOKEN_HOSTS = {"registry-1.docker.io": "auth.docker.io"}
 
 
-def build(runner: Runner, *, image: str, tag: str, context: str) -> str:
-    """Build for the one architecture exe.dev runs. Returns the tagged reference."""
+def build(runner: Runner, *, image: str, tag: str) -> str:
+    """Build this directory for the one architecture exe.dev runs. Returns the tagged reference."""
     reference = f"{image}:{tag}"
-    run(runner, ["docker", "build", "--platform", PLATFORM, "--tag", reference, context], what="build")
+    run(runner, ["docker", "build", "--platform", PLATFORM, "--tag", reference, "."], what="build")
     return reference
 
 

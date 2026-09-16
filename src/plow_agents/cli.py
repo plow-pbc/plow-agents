@@ -319,12 +319,11 @@ def image_build(
     tag: Annotated[
         str, typer.Option("--tag", help="the tag to push under; only a handle, the digest is the reference")
     ] = images.DEFAULT_TAG,
-    context: Annotated[str, typer.Argument(help="build context")] = ".",
 ) -> None:
     """Build this repo's image for linux/amd64, tagged from plow-agents.toml."""
     this = state(ctx)
-    _refuse_credential_in(context)
-    reference = images.build(this.docker, image=config.load(image=image).need_image(), tag=tag, context=context)
+    _refuse_credential_in()
+    reference = images.build(this.docker, image=config.load(image=image).need_image(), tag=tag)
     log(f"Built {reference}.")
 
 
@@ -396,9 +395,9 @@ def _cloud_target(target: str | None, settings: config.Config) -> tuple[str, str
     return f"exe:{reference}@{digest}", settings.slug or reference.rsplit("/", 1)[-1]
 
 
-def _refuse_credential_in(context: str) -> None:
-    """A build reads its context, and a credential sitting in one is a live token for `COPY . .` to bake into a public image."""
-    credential = os.path.abspath(os.path.join(context, CREDENTIAL_FILE))
+def _refuse_credential_in() -> None:
+    """A build reads this directory, and a credential in it is a live token for `COPY . .` to bake into a public image."""
+    credential = os.path.abspath(CREDENTIAL_FILE)
     if os.path.exists(credential):
         die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
             "have confirmed whose it is, before building an image from this directory")
@@ -414,7 +413,7 @@ def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: 
             "https://github.com/plow-pbc/plow-agents beside your Dockerfile first")
     # Before the build, not just before the mint. `mint` checks again, for its
     # own callers and for a file that appears in between.
-    _refuse_credential_in(".")
+    _refuse_credential_in()
     line = line or _only_free_line(this.api_base, this.token())
     # Build before minting: a build is where a Dockerfile, a base image or a
     # registry fails, and a failure after the mint would leave a live agent

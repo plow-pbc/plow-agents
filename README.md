@@ -301,7 +301,7 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `login [--new-line]` | Text a code to log in; optionally be given an assistant line. |
 | `lines` | The lines this account holds, and who answers on each. Pick a `free` one. |
 | `profile [--name] [--photo] [--show]` | Set or show your public profile. |
-| `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
+| `image build [--image] [--tag]` | Build this directory for `linux/amd64`, tagged from the toml. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [TARGET] [--line]` | Run `image@sha256:…` or `exe:<slug>` (default `last_pushed`) on one of your lines, on exe.dev. |
 | `deploy --local [--line]` | `docker compose build`, then `mint`, then `docker compose up --no-build -d` on this checkout's `compose.yml`. |

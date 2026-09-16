@@ -198,14 +198,14 @@ def main() -> int:
         code, _, err = run("image", "build", cwd=work, base=base, token=token, docker=docker)
         check("a failed build is fatal", (code != 0, "build failed" in err), (True, True))
 
-        # A live credential in the context is a token `COPY . .` would bake in.
-        context = os.path.join(work, "context-with-credential")
-        os.makedirs(context)
-        with open(os.path.join(context, "plow-credentials"), "w") as handle:
+        # A live credential here is a token `COPY . .` would bake in.
+        credentialled = os.path.join(work, "with-credential")
+        os.makedirs(credentialled)
+        with open(os.path.join(credentialled, "plow-credentials"), "w") as handle:
             handle.write("PLOW_AGENT_TOKEN=plow_live\n")
         docker = FakeDocker()
-        code, _, err = run("image", "build", context, cwd=work, base=base, token=token, docker=docker)
-        check("build refuses a context holding a credential, and docker never sees it",
+        code, _, err = run("image", "build", cwd=credentialled, base=base, token=token, docker=docker)
+        check("build refuses a directory holding a credential, and docker never sees it",
               (code != 0, "already exists" in err, docker.argvs), (True, True, []))
 
         for written, want in (("ghcr.io/you/agent", ("ghcr.io", "you/agent")),
