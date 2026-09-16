@@ -1,11 +1,11 @@
-"""`plow-agents.toml`: one repo, one agent, one listing.
+"""`plow-agents.toml`: one repo, one agent.
 
     slug  = "life"
     image = "ghcr.io/plow-pbc/life"
     last_pushed = "sha256:..."   # written by image push
 
-Read from the working directory by every `image` and `listing` verb. `--slug`
-and `--image` override without touching the file.
+Read from the working directory by every `image` verb and by `deploy`, which
+names the agent after `slug`. `--image` overrides without touching the file.
 """
 
 from __future__ import annotations
@@ -32,19 +32,14 @@ class Config:
             die(f"no image in {self.path} -- set `image = \"ghcr.io/you/agent\"` or pass --image")
         return self.image
 
-    def need_slug(self) -> str:
-        if not self.slug:
-            die(f"no slug in {self.path} -- set `slug = \"your-agent\"` or pass --slug")
-        return self.slug
-
     def need_last_pushed(self) -> str:
         if not self.last_pushed:
             die(f"no digest given and no last_pushed in {self.path} -- run `plow-agents image push` first")
         return self.last_pushed
 
 
-def load(directory: str = ".", *, slug: str | None = None, image: str | None = None) -> Config:
-    """The file in `directory`, with the two overrides applied.
+def load(directory: str = ".", *, image: str | None = None) -> Config:
+    """The file in `directory`, with `--image` applied over it.
 
     A missing file is not an error here: the verb that needs a field says so,
     naming the field, which is more use than "no config" from a tool whose
@@ -62,8 +57,6 @@ def load(directory: str = ".", *, slug: str | None = None, image: str | None = N
     for key, value in fields.items():
         if not isinstance(value, str):
             die(f"{path}: `{key}` must be a string")
-    if slug is not None:
-        fields["slug"] = slug
     if image is not None:
         fields["image"] = image
     return Config(path=path, **fields)

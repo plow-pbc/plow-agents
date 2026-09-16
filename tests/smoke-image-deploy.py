@@ -181,7 +181,6 @@ def main() -> int:
         check("toml has no digest before a push", config.load(work).last_pushed, "")
         check("--image overrides the toml without writing it",
               (config.load(work, image="ghcr.io/other/x").image, config.load(work).image), ("ghcr.io/other/x", IMAGE))
-        check("--slug overrides the toml", config.load(work, slug="other").slug, "other")
 
         missing = os.path.join(work, "elsewhere")
         os.makedirs(missing)
@@ -198,6 +197,16 @@ def main() -> int:
         docker = FakeDocker(fail="build")
         code, _, err = run("image", "build", cwd=work, base=base, token=token, docker=docker)
         check("a failed build is fatal", (code != 0, "build failed" in err), (True, True))
+
+        # A live credential in the context is a token `COPY . .` would bake in.
+        context = os.path.join(work, "context-with-credential")
+        os.makedirs(context)
+        with open(os.path.join(context, "plow-credentials"), "w") as handle:
+            handle.write("PLOW_AGENT_TOKEN=plow_live\n")
+        docker = FakeDocker()
+        code, _, err = run("image", "build", context, cwd=work, base=base, token=token, docker=docker)
+        check("build refuses a context holding a credential, and docker never sees it",
+              (code != 0, "already exists" in err, docker.argvs), (True, True, []))
 
         for written, want in (("ghcr.io/you/agent", ("ghcr.io", "you/agent")),
                               ("docker.io/you/agent", ("registry-1.docker.io", "you/agent")),

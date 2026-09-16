@@ -328,6 +328,7 @@ def image_build(
 ) -> None:
     """Build this repo's image for linux/amd64, tagged from plow-agents.toml."""
     this = state(ctx)
+    _refuse_credential_in(context)
     reference = images.build(this.docker, image=config.load(image=image).need_image(), tag=tag, context=context)
     log(f"Built {reference}.")
 
@@ -400,6 +401,14 @@ def _cloud_target(target: str | None, settings: config.Config) -> tuple[str, str
     return f"exe:{reference}@{digest}", settings.slug or reference.rsplit("/", 1)[-1]
 
 
+def _refuse_credential_in(context: str) -> None:
+    """A build reads its context, and a credential sitting in one is a live token for `COPY . .` to bake into a public image."""
+    credential = os.path.abspath(os.path.join(context, CREDENTIAL_FILE))
+    if os.path.exists(credential):
+        die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
+            "have confirmed whose it is, before building an image from this directory")
+
+
 def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: str | None) -> None:
     """`docker compose build`, then `mint`, then `docker compose up --no-build` on this checkout's compose.yml."""
     if target is not None:
@@ -408,14 +417,9 @@ def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: 
     if not os.path.isfile(compose):
         die(f"no compose.yml in {os.getcwd()} -- --local runs `docker compose up` here; copy compose.example.yml from "
             "https://github.com/plow-pbc/plow-agents beside your Dockerfile first")
-    # Before the build, not just before the mint: a build reads this directory,
-    # and a credential already sitting in it is a live token for `COPY . .` to
-    # bake into the image. `mint` checks again, for its own callers and for a
-    # file that appears in between.
-    credential = os.path.abspath(CREDENTIAL_FILE)
-    if os.path.exists(credential):
-        die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
-            "have confirmed whose it is, before building an image from this directory")
+    # Before the build, not just before the mint. `mint` checks again, for its
+    # own callers and for a file that appears in between.
+    _refuse_credential_in(".")
     line = line or _only_free_line(this.api_base, this.token())
     # Build before minting: a build is where a Dockerfile, a base image or a
     # registry fails, and a failure after the mint would leave a live agent

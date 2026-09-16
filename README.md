@@ -73,8 +73,9 @@ slug = "my-agent"
 image = "ghcr.io/you/my-agent"
 ```
 
-`image` is a repository with no tag. Every `image` verb reads this file from the working
-directory; `--slug` and `--image` override it for one run without writing to it.
+`image` is a repository with no tag, and `slug` is the name a deployed agent takes. Every `image`
+verb reads this file from the working directory; `--image` overrides it for one run without
+writing to it.
 
 ## Step 3 — Build the image
 
