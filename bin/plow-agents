@@ -571,7 +571,10 @@ def deploy(args: argparse.Namespace) -> None:
         config = json.loads(docker("compose", "config", "--format", "json", quiet=True))
         checkout = os.path.realpath(".")
         for service in config["services"].values():
-            context = os.path.realpath(service.get("build", {}).get("context", "."))
+            context = service.get("build", {}).get("context", ".")
+            if "://" in context or context.startswith("git@"):
+                die("Compose build context must be a filesystem path")
+            context = os.path.realpath(context)
             if context != checkout and not context.startswith(checkout + os.sep):
                 die("Compose build context must stay inside this checkout")
         docker("compose", "build")

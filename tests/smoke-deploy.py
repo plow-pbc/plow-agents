@@ -191,6 +191,18 @@ class Smoke(unittest.TestCase):
         self.assertFalse(self.created)
         self.assertFalse(Path("plow-credentials").exists())
 
+    def test_local_refuses_remote_compose_context(self):
+        for context in ("https://example.com/agent.git", "git@example.com:agent.git"):
+            with self.subTest(context=context):
+                self.compose_context = context
+                self.commands.clear()
+                out, err = self.run_cli("deploy", "--local", success=False,
+                                      expected_error="plow-agents: Compose build context must be a filesystem path")
+                self.assertNotIn("synthetic-config-secret", out + err)
+                self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"]])
+                self.assertFalse(self.created)
+                self.assertFalse(Path("plow-credentials").exists())
+
     def test_local_cleanup_failure_preserves_startup_error(self):
         self.fail_up = self.fail_revoke = True
         _, err = self.run_cli("deploy", "--local", success=False,
