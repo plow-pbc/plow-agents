@@ -125,7 +125,7 @@ class Stub(BaseHTTPRequestHandler):
         if self.path.startswith("/v1/agents/"):
             if Stub.delete_status != 200:
                 return self._send(Stub.delete_status, {"detail": "delete failed"})
-            uid = self.path.rsplit("/", 1)[1]
+            uid = self.path.partition("?")[0].rsplit("/", 1)[1]
             Stub.revoked.append(uid)
             AGENTS.pop(uid, None)
             for row in Stub.lines["data"]:
@@ -330,7 +330,16 @@ def main() -> int:
             check("credential-file revoke still refuses cloud agents", cloud_file.returncode != 0 and not any(req.startswith("DELETE ") for req in Stub.requests), True)
             with open(credential, "w") as handle:
                 handle.write(updated)
+            for status in (500, 503):
+                Stub.delete_status = status
+                failed_cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
+                check(f"line revoke HTTP {status} gives incomplete-retirement recovery", failed_cloud.returncode != 0 and "retirement may be incomplete" in failed_cloud.stderr and f"re-run `plow-agents revoke {CLOUD}`" in failed_cloud.stderr, True)
+                check(f"line revoke HTTP {status} does not report success", "Retired agent" in failed_cloud.stderr, False)
+                with open(credential) as handle:
+                    check(f"line revoke HTTP {status} preserves credential", handle.read(), updated)
+            Stub.delete_status = 200
             cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
+            check("cloud revoke sends expected line", f"DELETE /v1/agents/agt_cloud?line={CLOUD}" in Stub.requests, True)
             check("line revoke retires cloud agent", cloud.returncode == 0 and "agt_cloud" in Stub.revoked and "agt_cloud" not in AGENTS, True)
             check("line revoke prints retired cloud agent and line", f"Retired agent agt_cloud (exe:life) on line:{CLOUD}." in cloud.stderr, True)
             check("line revoke explains conditional chat retirement", f"If this agent had authenticated, your chats on line:{CLOUD} were retired too." in cloud.stderr, True)
@@ -338,6 +347,7 @@ def main() -> int:
             with open(credential) as handle:
                 check("cloud revoke preserves unrelated credential", handle.read(), updated)
             recovered = run("revoke", SELF_HOSTED, cwd=work, base=base, token=token)
+            check("self-hosted line revoke sends expected line", f"DELETE /v1/agents/agt_self_hosted?line={SELF_HOSTED}" in Stub.requests, True)
             check("line recovery retires its self_hosted agent", recovered.returncode == 0 and "agt_self_hosted" in Stub.revoked, True)
             check("line recovery leaves a different credential", os.path.exists(credential), True)
             Stub.delete_status = 500
@@ -345,6 +355,7 @@ def main() -> int:
             check("failed revoke leaves credential", failed.returncode != 0 and os.path.exists(credential), True)
             Stub.delete_status = 200
             revoked = run("revoke", cwd=work, base=base, token=token)
+            check("credential-file revoke sends no line parameter", Stub.requests[-1], "DELETE /v1/agents/d2e048a4cbefdc491657eaddc9c7657a")
             check("revoke retires the agent", revoked.returncode == 0 and "d2e048a4cbefdc491657eaddc9c7657a" in Stub.revoked, True)
             check("revoke removes credential", os.path.exists(credential), False)
             listed = run("lines", cwd=work, base=base, token=token)
