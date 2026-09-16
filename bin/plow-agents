@@ -504,14 +504,15 @@ def refuse_credentials(args: argparse.Namespace) -> None:
                 failed(error)
 
 
-def docker(*arguments: str) -> str:
+def docker(*arguments: str, quiet: bool = False) -> str:
     command = ["docker", *arguments]
     log("$ " + " ".join(command))
     try:
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE if quiet else subprocess.STDOUT, text=True, check=False)
     except OSError as error:
         die(f"cannot run docker: {error}")
-    log(result.stdout.rstrip())
+    if not quiet:
+        log(result.stdout.rstrip())
     if result.returncode:
         die(f"docker {' '.join(arguments)} failed ({result.returncode})")
     return result.stdout
@@ -567,6 +568,12 @@ def deploy(args: argparse.Namespace) -> None:
             die("pass --line with a free line from `plow-agents lines` (or login --new-line to get one)")
         args.line = free[0]
     if args.local:
+        config = json.loads(docker("compose", "config", "--format", "json", quiet=True))
+        checkout = os.path.realpath(".")
+        for service in config["services"].values():
+            context = os.path.realpath(service.get("build", {}).get("context", "."))
+            if context != checkout and not context.startswith(checkout + os.sep):
+                die("Compose build context must stay inside this checkout")
         docker("compose", "build")
         args.credential_file = CREDENTIAL_FILE
         mint(args)

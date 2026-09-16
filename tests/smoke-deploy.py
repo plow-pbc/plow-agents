@@ -42,6 +42,7 @@ class Smoke(unittest.TestCase):
         self.fail_revoke = False
         self.fail_up = False
         self.fail_build = False
+        self.compose_context = "."
         self.created = []
         self.deleted = []
         self.docker_patch = patch("subprocess.run", side_effect=self.docker)
@@ -53,6 +54,9 @@ class Smoke(unittest.TestCase):
 
     def docker(self, argv, **kwargs):
         self.commands.append(argv)
+        if argv[1:] == ["compose", "config", "--format", "json"]:
+            config = {"services": {"agent": {"build": {"context": self.compose_context}, "environment": {"SECRET": "synthetic-config-secret"}}}}
+            return subprocess.CompletedProcess(argv, 0, json.dumps(config))
         if argv[1:3] == ["compose", "build"]:
             self.assertFalse(Path("plow-credentials").exists())
             self.assertFalse(self.created)
@@ -166,15 +170,25 @@ class Smoke(unittest.TestCase):
         self.assertFalse(Path("plow-credentials").exists())
         self.fail_build = False
         self.commands.clear()
-        self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
+        out, err = self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
+        self.assertNotIn("synthetic-config-secret", out + err)
         self.assertIn("PLOW_API_BASE=http://host.docker.internal:8000\n", Path("plow-credentials").read_text())
-        self.assertEqual(self.commands, [["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
+        self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"], ["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
         Path("plow-credentials").unlink()
         self.created.clear()
         self.fail_up = True
         self.run_cli("deploy", "--local", success=False)
         self.assertEqual(self.deleted, ["https://api.example.test/v1/agents/agt_test"])
+        self.assertFalse(Path("plow-credentials").exists())
+
+    def test_local_refuses_external_compose_context(self):
+        self.compose_context = ".."
+        out, err = self.run_cli("deploy", "--local", success=False,
+                              expected_error="plow-agents: Compose build context must stay inside this checkout")
+        self.assertNotIn("synthetic-config-secret", out + err)
+        self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"]])
+        self.assertFalse(self.created)
         self.assertFalse(Path("plow-credentials").exists())
 
     def test_local_cleanup_failure_preserves_startup_error(self):
