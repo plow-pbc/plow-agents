@@ -536,7 +536,7 @@ def refuse_credentials(args: argparse.Namespace, ignore_file: str) -> None:
                 die(f"add {relative} to {ignore_file} before building")
             try:
                 with open(path, "rb") as handle:
-                    if any(line.lstrip().startswith((b"# plow-agent-uid:", b"PLOW_AGENT_TOKEN=")) for line in handle):
+                    if any(b"PLOW_AGENT_TOKEN=" in line or line.lstrip().startswith(b"# plow-agent-uid:") for line in handle):
                         if relative == "Dockerfile":
                             die("remove credentials from Dockerfile before building")
                         die(f"add {relative} to {ignore_file} before building")

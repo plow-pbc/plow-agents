@@ -135,6 +135,12 @@ class Smoke(unittest.TestCase):
         self.assertFalse(self.commands)
         self.assertFalse(self.requests)
 
+    def test_build_refuses_dockerfile_env_credential(self):
+        Path("Dockerfile").write_text("FROM scratch\nENV PLOW_AGENT_TOKEN=synthetic-agent\n")
+        self.run_cli("image", "build", success=False,
+                     expected_error="plow-agents: remove credentials from Dockerfile before building")
+        self.assertFalse(self.commands)
+
     def test_build_ignores_nested_credentials_and_account_token(self):
         Path("nested").mkdir()
         Path("nested/custom.env").write_text("# plow-agent-uid: agt_test\n")
