@@ -429,8 +429,7 @@ def revoke(args: argparse.Namespace) -> None:
     agent = call("GET", args.api_base, f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
     if not args.line and agent["provider"] != "self_hosted":
         die(f"{uid} is not self-hosted -- delete that agent in Plow")
-    query = "?" + urllib.parse.urlencode({"line": args.line}) if args.line else ""
-    status, _ = request("DELETE", args.api_base + f"/v1/agents/{urllib.parse.quote(uid, safe='')}{query}", token=account)
+    status, _ = request("DELETE", args.api_base + f"/v1/agents/{urllib.parse.quote(uid, safe='')}", token=account)
     if args.line and status // 100 == 5:
         die(f"agent {uid}: HTTP {status}; retirement may be incomplete -- re-run `plow-agents revoke {args.line}`")
     if status // 100 != 2 and status != 404:
