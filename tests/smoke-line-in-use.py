@@ -47,7 +47,6 @@ class Stub(BaseHTTPRequestHandler):
     lines: dict = LINES
     include_available = True
     agent_get_status = 200
-    chats = {"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": uid}}]} for uid in (FREE, CLOUD, SELF_HOSTED)]}
     rotate_status = 200
     delete_status = 200
     posts: list[str] = []
@@ -68,8 +67,6 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
         Stub.requests.append(f"GET {self.path}")
-        if self.path == "/v1/chats":
-            return self._send(200, Stub.chats)
         if self.path == "/v1/lines":
             other_account = self.headers.get("Authorization") == "Bearer acct_other"
             rows = []
@@ -260,7 +257,7 @@ def main() -> int:
         check("lines exits 0", listed.returncode, 0)
         check("lines reads availability from line occupancy", Stub.requests, ["GET /v1/lines"])
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
-        check("free line is free", rows.get(FREE), "free")
+        check("chat-less free line is free", rows.get(FREE), "free")
         check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
         check("self_hosted line names its agent", rows.get(SELF_HOSTED), "agt_self_hosted")
 
@@ -279,24 +276,20 @@ def main() -> int:
             check("another account's line is refused before create", refused.returncode != 0 and Stub.requests == ["GET /v1/lines"], True)
             check("cross-account refusal creates no credential", os.path.exists(os.path.join(work, "plow-credentials")), False)
         Stub.include_available = False
+        for caller_token, foreign_line, own_line, own_agent in (
+            (token, OTHER, CLOUD, "agt_cloud"), (other_token, CLOUD, OTHER, "agt_other"),
+        ):
+            listed = run("lines", cwd=work, base=base, token=caller_token)
+            rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
+            check("missing availability labels a foreign-held line unknown", rows.get(foreign_line), "unknown")
+            check("missing availability labels an unheld line unknown", rows.get(FREE), "unknown")
+            check("missing availability still names the caller's agent", rows.get(own_line), own_agent)
         Stub.requests.clear()
         refused = run("mint", OTHER, cwd=work, base=base, token=token)
         check("missing availability lets the API decide", refused.returncode != 0 and "POST /v1/agents" in Stub.requests, True)
         check("API refusal leaves no credential", os.path.exists(os.path.join(work, "plow-credentials")), False)
         Stub.include_available = True
 
-        extra_lines = [dict(line(uid, uid), agent_uid=None) for uid in ("ln_unowned", "ln_peer", "ln_pending")]
-        Stub.lines["data"].extend(extra_lines)
-        Stub.chats["data"][0]["participants"].append({"type": "agent", "relationship": "peer", "line": {"uid": "ln_peer"}})
-        Stub.chats["data"].append({"status": "pending", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": "ln_pending"}}]})
-        listed = run("lines", cwd=work, base=base, token=token)
-        rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
-        check("free lines are listed regardless of chat membership or status", all(rows.get(row["uid"]) == "free" for row in extra_lines), True)
-        Stub.chats = {"data": []}
-        empty = run("lines", cwd=work, base=base, token=token)
-        rows = {row.split("\t")[0]: row.split("\t")[3] for row in empty.stdout.splitlines()}
-        check("chat-less free line is listed as free", empty.returncode == 0 and rows.get(FREE) == "free", True)
-        check("chat-less occupied lines still name their agents", (rows.get(CLOUD), rows.get(SELF_HOSTED)), ("agt_cloud", "agt_self_hosted"))
         Stub.requests.clear()
         logged_in = run("login", cwd=work, base=base, token=token)
         check("login finishes without checking pool lines", logged_in.returncode == 0 and Stub.requests == ["POST /v1/auth/activate", "POST /v1/auth/activate/redeem"], True)

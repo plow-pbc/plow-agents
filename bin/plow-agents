@@ -2,9 +2,7 @@
 """Manage the Plow agents on your account. Standard library only.
 
     plow-agents login            one-time: text a code, get an account token
-    plow-agents login --new-line same, and be given an assistant line
-    plow-agents lines            the assistant lines this account holds, and who
-                                 is already answering on each
+    plow-agents lines            the global pool of lines and their availability
     plow-agents mint <line-uid>  that line's credential -> ./plow-credentials
     plow-agents profile          set or show this account's public profile (--photo takes a file)
     plow-agents rotate           replace this self-hosted agent's credential
@@ -198,7 +196,7 @@ def account_token(args: argparse.Namespace) -> str:
 # --- verbs -----------------------------------------------------------------
 
 
-def account_lines(base: str, token: str) -> list[dict]:
+def pool_lines(base: str, token: str) -> list[dict]:
     """Read pool lines and their assistant occupancy from Plow."""
     return call("GET", base, "/v1/lines", token=token)["data"]
 
@@ -237,10 +235,10 @@ def login(args: argparse.Namespace) -> None:
 
 def lines(args: argparse.Namespace) -> None:
     token = account_token(args)
-    available = account_lines(args.api_base, token)
+    available = pool_lines(args.api_base, token)
     print("LINE\tNAME\tNUMBER\tSTATUS")
     for line in sorted(available, key=lambda line: line["uid"]):
-        status = line["agent_uid"] or ("in use" if line.get("available") is False else "free")
+        status = line["agent_uid"] or ({True: "free", False: "in use"}.get(line.get("available"), "unknown"))
         print(f"{line['uid']}\t{line.get('display_name') or ''}\t{line.get('provider_key') or ''}\t{status}")
 
 
@@ -359,7 +357,7 @@ def mint(args: argparse.Namespace) -> None:
     # tell which replied, so the line is checked here, before anything is
     # created. There is no flag to proceed anyway: retire the agent that holds
     # it first, which is a decision rather than a keystroke.
-    line = next((row for row in call("GET", args.api_base, "/v1/lines", token=account)["data"] if row["uid"] == line_uid), None)
+    line = next((row for row in pool_lines(args.api_base, account) if row["uid"] == line_uid), None)
     if line is None:
         die(f"unknown line:{line_uid}")
     if line["agent_uid"]:
@@ -401,7 +399,7 @@ def revoke(args: argparse.Namespace) -> None:
     credential = read_credential(path)
     account = account_token(args)
     if args.line:
-        available = call("GET", args.api_base, "/v1/lines", token=account)["data"]
+        available = pool_lines(args.api_base, account)
         line = next((line for line in available if line["uid"] == args.line), None)
         if line is None:
             die(f"unknown line:{args.line}")
@@ -584,9 +582,9 @@ def deploy(args: argparse.Namespace) -> None:
             name = image_repository(repository).rsplit("/", 1)[-1]
     token = account_token(args)
     if not args.line:
-        free = [row["uid"] for row in account_lines(args.api_base, token) if not row["agent_uid"]]
+        free = [row["uid"] for row in pool_lines(args.api_base, token) if not row["agent_uid"]]
         if len(free) != 1:
-            die("pass --line with a free line from `plow-agents lines` (or login --new-line to get one)")
+            die("pass --line with a free line from `plow-agents lines`")
         args.line = free[0]
     if args.local:
         args.credential_file = CREDENTIAL_FILE
@@ -623,10 +621,10 @@ def main() -> int:
     verbs = parser.add_subparsers(dest="verb", required=True)
 
     it = verbs.add_parser("login", help="text a code, store this account's token")
-    it.add_argument("--new-line", action="store_true", help="also have Plow give this account a new assistant line and a chat on it")
+    it.add_argument("--new-line", action="store_true", help="also provision a chat during activation; not required to select a pool line")
     it.set_defaults(run=login)
 
-    verbs.add_parser("lines", help="the assistant lines this account holds").set_defaults(run=lines)
+    verbs.add_parser("lines", help="the global pool of lines and their availability").set_defaults(run=lines)
 
     it = verbs.add_parser("profile", help="set or show this account's public profile")
     it.add_argument("--name", help="public display name")
