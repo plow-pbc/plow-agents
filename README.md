@@ -25,7 +25,16 @@ if you already have a line. Keep the ID of a `free` line for step 5.
 
 ## 2. Write the project file
 
-In your agent repository, beside its Dockerfile, write `plow-agents.toml`.
+Start with a Dockerfile for your agent. For example, if your Python agent starts
+from `agent.py`:
+
+```dockerfile
+FROM python:3.11-slim
+COPY agent.py /agent.py
+CMD ["python", "/agent.py"]
+```
+
+Beside the Dockerfile, write `plow-agents.toml`.
 Replace `YOUR_ACCOUNT` with your registry account and `my-agent` with your agent's name.
 
 ```sh
@@ -86,9 +95,7 @@ plow-agents deploy --local --line ln_xxx
 docker compose logs -f
 ```
 
-This builds first, mints `./plow-credentials`, then starts Compose with `--no-build`.
-Compose loads the credential into the container's environment. If startup fails,
-the CLI revokes the agent it just minted. When finished:
+When finished:
 
 ```sh
 plow-agents revoke
@@ -116,8 +123,6 @@ options go before the command.
 
 ## Worth knowing
 
-- The registry package must be public; Plow pulls without your registry login.
-- Deployments use a digest, not a tag. Multi-architecture indexes are refused by `image push`.
 - Builds refuse any `plow-credentials` under the current directory, even if ignored by Docker.
 
 ## License

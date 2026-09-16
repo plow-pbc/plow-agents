@@ -37,6 +37,7 @@ class Smoke(unittest.TestCase):
         Path("plow-agents.toml").write_text(f'slug = "agent"\nimage = "{IMAGE}:v1"\n')
         self.commands = []
         self.requests = []
+        self.fail_revoke = False
         self.fail_up = False
         self.fail_build = False
         self.private = False
@@ -82,14 +83,14 @@ class Smoke(unittest.TestCase):
             return Response({"agent": {"uid": "agt_test"}, "token": "synthetic-agent"})
         if req.method == "DELETE":
             self.deleted.append(url)
-            return Response({})
+            return Response({}, 500 if self.fail_revoke else 200)
         if url.endswith("/agt_test"):
             return Response({"provider": "self_hosted"})
         if url.endswith("/v1/agents"):
             return Response([{"line": {"uid": "ln_free"}, "provider": f"exe:{IMAGE}@{DIGEST}", "status": "failed", "failure_code": "pull_failed"}])
         self.fail(f"unexpected request: {req.method} {url}")
 
-    def run_cli(self, *args, success=True):
+    def run_cli(self, *args, success=True, expected_error=None):
         out, err = io.StringIO(), io.StringIO()
         with patch.object(sys, "argv", [str(CLI), "--api-base", "https://api.example.test", "--token-file", "token", *args]):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -98,6 +99,8 @@ class Smoke(unittest.TestCase):
                 except SystemExit as error:
                     code = error.code
         self.assertEqual(code == 0, success, err.getvalue() or str(code))
+        if expected_error is not None:
+            self.assertEqual(code, expected_error)
         return out.getvalue(), err.getvalue()
 
     def test_image_build(self):
@@ -168,6 +171,15 @@ class Smoke(unittest.TestCase):
         self.run_cli("deploy", "--local", success=False)
         self.assertEqual(self.deleted, ["https://api.example.test/v1/agents/agt_test"])
         self.assertFalse(Path("plow-credentials").exists())
+
+    def test_local_cleanup_failure_preserves_startup_error(self):
+        self.fail_up = self.fail_revoke = True
+        _, err = self.run_cli("deploy", "--local", success=False,
+                              expected_error="plow-agents: docker compose up --no-build -d failed (1)")
+        self.assertIn("agent may still be live", err)
+        self.assertIn("HTTP 500", err)
+        self.assertTrue(Path("plow-credentials").exists())
+        self.assertEqual(self.deleted, ["https://api.example.test/v1/agents/agt_test"])
 
     def test_agents(self):
         out, _ = self.run_cli("agents")

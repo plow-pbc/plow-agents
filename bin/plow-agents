@@ -625,7 +625,10 @@ def deploy(args: argparse.Namespace) -> None:
         except BaseException:
             log("Compose up failed -- revoking the agent just minted.")
             args.line = None
-            revoke(args)
+            try:
+                revoke(args)
+            except BaseException as error:
+                log(f"Cleanup failed: {error}. The agent may still be live; retry `plow-agents revoke`.")
             raise
         log("Requested local agent. Run `docker compose logs -f` to watch startup.")
     else:
