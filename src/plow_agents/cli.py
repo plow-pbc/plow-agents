@@ -189,7 +189,6 @@ def profile(
 def mint(
     ctx: typer.Context,
     line: Annotated[str, typer.Argument(help="line uid, as printed by `lines`")],
-    credential_file: Annotated[str, typer.Option("--credential-file", help="where to write the credential")] = CREDENTIAL_FILE,
     agent_api_base: Annotated[
         str | None,
         typer.Option(
@@ -204,7 +203,7 @@ def mint(
     # *container* calls. The same address usually, but not against a local
     # stack: a 127.0.0.1 that works out here is the container's own loopback.
     container_base = strip_v1(agent_api_base) if agent_api_base is not None else this.api_base
-    destination = os.path.abspath(credential_file)
+    destination = os.path.abspath(CREDENTIAL_FILE)
     if os.path.isdir(destination):
         die(f"{destination} is a directory -- run `docker compose down -v && rmdir {destination}`, then mint again")
     if os.path.exists(destination):
@@ -255,13 +254,10 @@ def _remedy(this: State, account: str, agent_uid: str, line: str) -> str:
 
 
 @app.command()
-def rotate(
-    ctx: typer.Context,
-    credential_file: Annotated[str, typer.Option("--credential-file", help="the credential to rotate")] = CREDENTIAL_FILE,
-) -> None:
+def rotate(ctx: typer.Context) -> None:
     """Replace this agent's credential in ./plow-credentials."""
     this = state(ctx)
-    path = os.path.abspath(credential_file)
+    path = os.path.abspath(CREDENTIAL_FILE)
     credential = read_credential(path)
     uid = credential_agent_uid(credential)
     base = strip_v1(credential.get("PLOW_API_BASE", ""))
@@ -276,11 +272,10 @@ def rotate(
 def revoke(
     ctx: typer.Context,
     line: Annotated[str | None, typer.Argument(help="line uid whose self-hosted agent should be retired")] = None,
-    credential_file: Annotated[str, typer.Option("--credential-file", help="the credential to revoke")] = CREDENTIAL_FILE,
 ) -> None:
     """Retire the self-hosted agent in ./plow-credentials, or by line."""
     this = state(ctx)
-    path = os.path.abspath(credential_file)
+    path = os.path.abspath(CREDENTIAL_FILE)
     credential = read_credential(path)
     account = this.token()
     if line:
@@ -425,7 +420,7 @@ def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: 
     # registry fails, and a failure after the mint would leave a live agent
     # holding the line with no container to answer on it.
     run(this.docker, ["docker", "compose", "build"], what="docker compose build")
-    mint(ctx, line=line, credential_file=CREDENTIAL_FILE, agent_api_base=None)
+    mint(ctx, line=line, agent_api_base=None)
     try:
         run(this.docker, ["docker", "compose", "up", "--no-build", "-d"], what="docker compose up")
     except BaseException:
@@ -433,7 +428,7 @@ def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: 
         # to answer on that line, and the credential is a live token sitting in
         # the directory the next build reads.
         log("docker compose up failed -- retiring the agent just minted for this line.")
-        revoke(ctx, line=None, credential_file=CREDENTIAL_FILE)
+        revoke(ctx, line=None)
         raise
     print("docker compose logs -f")
 

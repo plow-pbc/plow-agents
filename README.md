@@ -308,11 +308,11 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `agents` | What is deployed on this account: line, slug, status, image digest. |
 | `mint <line>` | A self-hosted credential for one line, into `./plow-credentials`. |
 | `rotate` | Replace that credential. |
-| `revoke [line]` | Retire a self-hosted agent, by credential file or by line. |
+| `revoke [line]` | Retire a self-hosted agent, by `./plow-credentials` or by line. |
 
 Every command takes `--help`. `--api-base` points the tool at another Plow; `--token-file` at
-another account token. `mint`, `rotate` and `revoke` take `--credential-file <path>`.
-The credential file holds `PLOW_API_BASE`, `PLOW_AGENT_TOKEN`, and a `# plow-agent-uid: <uid>`
+another account token. `mint`, `rotate` and `revoke` read and write `./plow-credentials` in the
+working directory, and nowhere else. That file holds `PLOW_API_BASE`, `PLOW_AGENT_TOKEN`, and a `# plow-agent-uid: <uid>`
 comment — see [the example](plow-credentials.example).
 
 # Working on this repo

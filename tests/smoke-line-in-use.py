@@ -322,15 +322,16 @@ def main() -> int:
                 original = handle.read()
             check("credential records agent identity", "# plow-agent-uid: d2e048a4cbefdc491657eaddc9c7657a\n" in original, True)
             check("only image-supported settings are emitted", {line.split("=", 1)[0] for line in original.splitlines() if line and not line.startswith("#")}, {"PLOW_API_BASE", "PLOW_AGENT_TOKEN"})
-            unsupported = os.path.join(work, "unsupported-credential")
             content = "PLOW_API_BASE=https://api.example.com\nPLOW_AGENT_TOKEN=unused\nPLOW_AGENT_UID=unsupported-agent\n"
-            with open(unsupported, "w") as handle:
+            with open(credential, "w") as handle:
                 handle.write(content)
             Stub.requests.clear()
             for verb in ("rotate", "revoke"):
-                refused = run(verb, "--credential-file", unsupported, cwd=work, base=base, token=token)
-                with open(unsupported) as handle:
+                refused = run(verb, cwd=work, base=base, token=token)
+                with open(credential) as handle:
                     check(f"{verb} requires comment identity before API calls", refused.returncode != 0 and not Stub.requests and handle.read() == content, True)
+            with open(credential, "w") as handle:
+                handle.write(original)
             removed = run("fix-credentials", cwd=work, base=base, token=token)
             check("repair verb is unavailable", removed.returncode == 2 and "No such command" in removed.stderr, True)
             check("credential has mode 600", os.stat(credential).st_mode & 0o777, 0o600)
@@ -472,27 +473,20 @@ def main() -> int:
         finally:
             proxy.shutdown()
             proxy.server_close()
-        custom = os.path.join(work, "nested", "agent-credential")
-        named = run("mint", FREE, "--credential-file", custom, cwd=work, base=base, token=token)
-        check("mint supports a named credential file", named.returncode == 0 and os.path.isfile(custom), True)
-        if os.path.isfile(custom):
-            check("named mint does not create default file", os.path.exists(credential), False)
-            rotated = run("rotate", "--credential-file", custom, cwd=work, base=base, token=token)
-            with open(custom) as handle:
-                check("rotate updates the named credential", rotated.returncode == 0 and "plow_rotated100_token" in handle.read(), True)
-            retired = run("revoke", "--credential-file", custom, cwd=work, base=base, token=token)
-            check("revoke removes the named credential", retired.returncode == 0 and not os.path.exists(custom), True)
-        blocker = os.path.join(work, "not-a-directory")
-        with open(blocker, "w") as handle:
-            handle.write("parent is a file")
-        impossible = os.path.join(blocker, "credential")
+        # A directory the process cannot write: the mint reaches Plow, the
+        # install cannot land, and the agent it just created must not survive.
+        unwritable = os.path.join(work, "unwritable")
+        os.makedirs(unwritable)
+        os.chmod(unwritable, 0o500)
+        impossible = os.path.join(unwritable, "plow-credentials")
         seen = len(Stub.revoked)
-        failed = run("mint", FREE, "--credential-file", impossible, cwd=work, base=base, token=token)
+        failed = run("mint", FREE, cwd=unwritable, base=base, token=token)
         check("failed credential installation retires the new agent", failed.returncode != 0 and len(Stub.revoked) == seen + 1, True)
         Stub.delete_status = 500
-        failed = run("mint", FREE, "--credential-file", impossible, cwd=work, base=base, token=token)
+        failed = run("mint", FREE, cwd=unwritable, base=base, token=token)
         check("failed installation and retirement identify the destination", impossible in failed.stderr, True)
         Stub.delete_status = 200
+        os.chmod(unwritable, 0o700)
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("empty lines explain activation", "login --new-line" in empty.stderr, True)
