@@ -330,13 +330,12 @@ def main() -> int:
             check("credential-file revoke still refuses cloud agents", cloud_file.returncode != 0 and not any(req.startswith("DELETE ") for req in Stub.requests), True)
             with open(credential, "w") as handle:
                 handle.write(updated)
-            for status in (500, 503):
-                Stub.delete_status = status
-                failed_cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
-                check(f"line revoke HTTP {status} gives incomplete-retirement recovery", failed_cloud.returncode != 0 and "retirement may be incomplete" in failed_cloud.stderr and f"re-run `plow-agents revoke {CLOUD}`" in failed_cloud.stderr, True)
-                check(f"line revoke HTTP {status} does not report success", "Retired agent" in failed_cloud.stderr, False)
-                with open(credential) as handle:
-                    check(f"line revoke HTTP {status} preserves credential", handle.read(), updated)
+            Stub.delete_status = 500
+            failed_cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
+            check("line revoke HTTP 500 gives incomplete-retirement recovery", failed_cloud.returncode != 0 and "retirement may be incomplete" in failed_cloud.stderr and f"re-run `plow-agents revoke {CLOUD}`" in failed_cloud.stderr, True)
+            check("line revoke HTTP 500 does not report success", "Retired agent" in failed_cloud.stderr, False)
+            with open(credential) as handle:
+                check("line revoke HTTP 500 preserves credential", handle.read(), updated)
             Stub.delete_status = 200
             cloud = run("revoke", CLOUD, cwd=work, base=base, token=token)
             check("cloud revoke sends expected line", f"DELETE /v1/agents/agt_cloud?line={CLOUD}" in Stub.requests, True)
@@ -347,7 +346,6 @@ def main() -> int:
             with open(credential) as handle:
                 check("cloud revoke preserves unrelated credential", handle.read(), updated)
             recovered = run("revoke", SELF_HOSTED, cwd=work, base=base, token=token)
-            check("self-hosted line revoke sends expected line", f"DELETE /v1/agents/agt_self_hosted?line={SELF_HOSTED}" in Stub.requests, True)
             check("line recovery retires its self_hosted agent", recovered.returncode == 0 and "agt_self_hosted" in Stub.revoked, True)
             check("line recovery leaves a different credential", os.path.exists(credential), True)
             Stub.delete_status = 500

@@ -577,6 +577,13 @@ def deploy(args: argparse.Namespace) -> None:
     if args.local:
         if args.target:
             die("--local takes no target; it starts this checkout's Compose project")
+        ignore_file = "Dockerfile.dockerignore" if os.path.exists("Dockerfile.dockerignore") else ".dockerignore"
+        excluded = False
+        for pattern, exclude in dockerignore_patterns(ignore_file):
+            if pattern.match(CREDENTIAL_FILE):
+                excluded = exclude
+        if not excluded:
+            die(f"add {CREDENTIAL_FILE} to {ignore_file} before building")
     else:
         if args.agent_api_base is not None:
             die("deploy --agent-api-base requires --local")
@@ -602,10 +609,10 @@ def deploy(args: argparse.Namespace) -> None:
         args.credential_file = CREDENTIAL_FILE
         mint(args)
         try:
-            docker("compose", "up", "-d")
+            docker("compose", "up", "--build", "-d")
         except (SystemExit, KeyboardInterrupt):
             log("Compose up did not complete. Agent and plow-credentials kept. "
-                "Fix Compose and run `docker compose up -d`, "
+                "Fix Compose and run `docker compose up --build -d`, "
                 "or run `plow-agents revoke` to retire the agent.")
             raise
         log("Requested local agent. Run `docker compose logs -f` to watch startup.")

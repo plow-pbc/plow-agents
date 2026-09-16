@@ -211,13 +211,25 @@ class Smoke(unittest.TestCase):
             self.run_cli("deploy", *target, success=False)
             self.assertFalse(self.requests)
 
+    def test_local_requires_credential_exclusion_before_mint(self):
+        for rules in (None, "plow-*\n!plow-credentials\n"):
+            with self.subTest(rules=rules):
+                if rules is not None:
+                    Path(".dockerignore").write_text(rules)
+                self.run_cli("deploy", "--local", success=False,
+                             expected_error="plow-agents: add plow-credentials to .dockerignore before building")
+                self.assertFalse(self.requests)
+                self.assertFalse(self.commands)
+                self.assertFalse(Path("plow-credentials").exists())
+
     def test_deploy_local(self):
+        Path(".dockerignore").write_text("plow-credentials\n")
         fixture = Path("tests/__pycache__/test_plow_init.cpython-311.pyc")
         fixture.parent.mkdir(parents=True)
         fixture.write_bytes(b"\x00\nPLOW_AGENT_TOKEN=synthetic-fixture\n")
         self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
         self.assertIn("PLOW_API_BASE=http://host.docker.internal:8000\n", Path("plow-credentials").read_text())
-        self.assertEqual(self.commands, [["docker", "compose", "up", "-d"]])
+        self.assertEqual(self.commands, [["docker", "compose", "up", "--build", "-d"]])
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
 
     def test_docker_failure_prints_stderr(self):
@@ -227,9 +239,10 @@ class Smoke(unittest.TestCase):
             self.assertIn("compose startup failed: fixture error", err)
 
     def test_local_startup_failure_preserves_agent_and_credential(self):
+        Path(".dockerignore").write_text("plow-credentials\n")
         self.fail_up = True
         _, err = self.run_cli("deploy", "--local", success=False,
-                              expected_error="plow-agents: docker compose up -d failed (1)")
+                              expected_error="plow-agents: docker compose up --build -d failed (1)")
         self.assertIn("compose startup failed: fixture error", err)
         self.assertFalse(self.deleted)
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
@@ -237,7 +250,7 @@ class Smoke(unittest.TestCase):
                          "PLOW_API_BASE=https://api.example.test\nPLOW_AGENT_TOKEN=synthetic-agent\n# plow-agent-uid: agt_test\n")
         self.assertIn("Agent and plow-credentials kept", err)
         self.assertIn("plow-agents revoke", err)
-        self.assertIn("docker compose up -d", err)
+        self.assertIn("docker compose up --build -d", err)
 
     def test_agents(self):
         out, _ = self.run_cli("agents")
