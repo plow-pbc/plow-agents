@@ -51,11 +51,14 @@ If ./plow-agents.toml has image = "…", you can omit the name.
 
 ## 4. Push the image
 
+Create a [classic GitHub PAT](https://github.com/settings/tokens/new?scopes=write:packages) with `write:packages`; fine-grained PATs cannot push to GHCR. Use the PAT as the password when Docker prompts:
+
 ```sh
-docker login ghcr.io
+docker login ghcr.io -u YOUR_GITHUB_USERNAME
 plow-agents image push ghcr.io/YOUR_ACCOUNT/my-agent:v1
 ```
 
+After the first push, make the package public in GitHub package settings; otherwise Plow’s anonymous pull fails.
 Copy the full `repository@sha256:…` reference printed on the last line.
 
 ## 5. Request an agent
@@ -137,9 +140,9 @@ plow-agents profile --show
 Every command accepts `--help`. Global `--api-base URL` and `--token-file PATH`
 options go before the command.
 
-## Worth knowing
+## Where changes go
 
-- The registry package must be public; private images fail to deploy with `failed(image_pull_timeout)`.
+Before editing, find the owner in the [sibling repo map](https://github.com/plow-pbc/plow-hermes-agent/blob/main/README.md#the-repos) and make the change there.
 
 ## License
 
