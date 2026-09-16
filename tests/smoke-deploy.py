@@ -212,7 +212,7 @@ class Smoke(unittest.TestCase):
         self.requests.clear()
         Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\nlast_pushed = "{IMAGE}@{DIGEST}"\n')
         for target in ((), (DIGEST,), (IMAGE + ":v1",)):
-            self.run_cli("deploy", *target, success=False)
+            self.run_cli("deploy", *target, "--line", "ln_free", success=False)
             self.assertFalse(self.requests)
 
     def test_local_requires_credential_exclusion_before_mint(self):
@@ -220,7 +220,7 @@ class Smoke(unittest.TestCase):
             with self.subTest(rules=rules):
                 if rules is not None:
                     Path(".dockerignore").write_text(rules)
-                self.run_cli("deploy", "--local", success=False,
+                self.run_cli("deploy", "--local", "--line", "ln_free", success=False,
                              expected_error="plow-agents: add plow-credentials to .dockerignore before building")
                 self.assertFalse(self.requests)
                 self.assertFalse(self.commands)
@@ -230,8 +230,8 @@ class Smoke(unittest.TestCase):
         Path(".dockerignore").write_text("plow-credentials\n")
         for target in ("exe:hermes", "--local"):
             with self.subTest(target=target):
-                self.run_cli("deploy", target, success=False,
-                             expected_error="plow-agents: deploy requires --line; choose a free line from `plow-agents lines`")
+                _, err = self.run_cli("deploy", target, success=False, expected_error=2)
+                self.assertIn("required: --line", err)
                 self.assertFalse(self.requests)
                 self.assertFalse(self.commands)
                 self.assertFalse(Path("plow-credentials").exists())
