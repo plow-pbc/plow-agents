@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`init`, `image build|push`, `deploy` and `agents` against a fake docker and a stub API.
+"""`image build|push`, `deploy` and `agents` against a fake docker and a stub API.
 
 Standard library only, no network, no Plow account, and -- the point of the
 injected runner -- no docker daemon: every `docker` argv the CLI would run is
@@ -175,27 +175,18 @@ def main() -> int:
         toml = os.path.join(work, config.CONFIG_FILE)
 
         # --- plow-agents.toml: the unit of identity -------------------------
-        code, _, _ = run("init", "--slug", "reference", "--image", IMAGE, cwd=work, base=base, token=token)
-        check("init writes plow-agents.toml", (code, os.path.isfile(toml)), (0, True))
+        with open(toml, "w") as handle:
+            handle.write(f'slug = "reference"\nimage = "{IMAGE}"\n')
         check("toml read gives slug and image", (config.load(work).slug, config.load(work).image), ("reference", IMAGE))
         check("toml has no digest before a push", config.load(work).last_pushed, "")
         check("--image overrides the toml without writing it",
               (config.load(work, image="ghcr.io/other/x").image, config.load(work).image), ("ghcr.io/other/x", IMAGE))
         check("--slug overrides the toml", config.load(work, slug="other").slug, "other")
-        code, _, err = run("init", cwd=work, base=base, token=token)
-        check("init refuses to overwrite an existing toml", (code != 0, "already exists" in err), (True, True))
 
         missing = os.path.join(work, "elsewhere")
         os.makedirs(missing)
         code, _, err = run("image", "push", cwd=missing, base=base, token=token)
         check("a verb with no toml names the field it wanted", (code != 0, "no image in" in err), (True, True))
-
-        # --- init ---------------------------------------------------------
-        code, _, err = run("init", "--slug", "a", "--image", "ghcr.io/a/b", "--directory", os.path.join(work, "both"),
-                           cwd=work, base=base, token=token)
-        check("init with both fields given asks for nothing more", (code, "Set " in err), (0, False))
-        code, _, err = run("init", "--slug", "a", "--directory", os.path.join(work, "one"), cwd=work, base=base, token=token)
-        check("init names only the field it was not given", (code, "Set `image` before" in err), (0, True))
 
         # --- image build ----------------------------------------------------
         docker = FakeDocker()

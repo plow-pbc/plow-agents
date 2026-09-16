@@ -65,12 +65,8 @@ ln_a1b2c3	Ada	+15555550123	free
 
 ## Step 2 — Say which agent this repo is
 
-One repo, one agent. `init` writes `plow-agents.toml` — the only file that carries that identity.
-
-```sh
-plow-agents init --slug my-agent --image ghcr.io/you/my-agent
-cat plow-agents.toml
-```
+One repo, one agent. `plow-agents.toml` is the only file that carries that identity. Write it
+beside your `Dockerfile`; it is two lines and there is no verb for it:
 
 ```toml
 slug = "my-agent"
@@ -304,7 +300,6 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 | `login [--new-line]` | Text a code to log in; optionally be given an assistant line. |
 | `lines` | The lines this account holds, and who answers on each. Pick a `free` one. |
 | `profile [--name] [--photo] [--show]` | Set or show your public profile. |
-| `init [--slug] [--image]` | Write `plow-agents.toml`. |
 | `image build [--image] [--tag] [CONTEXT]` | Build for `linux/amd64`, tagged from the toml. |
 | `image push [--image] [--tag]` | Push, verify the anonymous pull, record `last_pushed`. |
 | `deploy [TARGET] [--line]` | Run `image@sha256:…` or `exe:<slug>` (default `last_pushed`) on one of your lines, on exe.dev. |

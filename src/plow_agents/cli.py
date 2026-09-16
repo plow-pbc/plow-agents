@@ -317,23 +317,6 @@ def revoke(
 # --- the image --------------------------------------------------------------
 
 
-@app.command()
-def init(
-    slug: Annotated[str, typer.Option("--slug", help="the listing slug this repo claims")] = "",
-    image: Annotated[str, typer.Option("--image", help="the public image reference to push to, without a tag")] = "",
-    directory: Annotated[str, typer.Option("--directory", help="where to write it")] = ".",
-) -> None:
-    """Write plow-agents.toml, the one file that says which agent this repo is."""
-    path = os.path.abspath(os.path.join(directory, config.CONFIG_FILE))
-    if os.path.exists(path):
-        die(f"{path} already exists -- edit it, or pass --directory")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as handle:
-        handle.write(f'slug = "{slug}"\nimage = "{image}"\n')
-    missing = [f"`{field}`" for field, value in (("slug", slug), ("image", image)) if not value]
-    log(f"Wrote {path}." + (f" Set {' and '.join(missing)} before `plow-agents image push`." if missing else ""))
-
-
 @image_app.command("build")
 def image_build(
     ctx: typer.Context,
