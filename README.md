@@ -123,7 +123,7 @@ options go before the command.
 
 ## Worth knowing
 
-- The registry package must be public; private images fail to deploy with `failed(pull_failed)`.
+- The registry package must be public; private images fail to deploy with `failed(image_pull_timeout)`.
 
 ## License
 

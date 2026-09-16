@@ -29,10 +29,13 @@ class Smoke(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.previous = os.getcwd()
-        os.chdir(self.directory.name)
+        work = Path(self.directory.name) / "work"
+        work.mkdir()
+        os.chdir(work)
         self.addCleanup(self.directory.cleanup)
         self.addCleanup(os.chdir, self.previous)
-        Path("token").write_text("synthetic-account")
+        self.token_file = str(Path(self.directory.name) / "token")
+        Path(self.token_file).write_text("synthetic-account")
         Path("plow-agents.toml").write_text(f'slug = "agent"\nimage = "{IMAGE}:v1"\n')
         self.commands = []
         self.requests = []
@@ -74,12 +77,13 @@ class Smoke(unittest.TestCase):
         if url.endswith("/agt_test"):
             return Response({"provider": "self_hosted"})
         if url.endswith("/v1/agents"):
-            return Response([{"line": {"uid": "ln_free"}, "provider": f"exe:{IMAGE}@{DIGEST}", "status": "failed", "failure_code": "pull_failed"}])
+            return Response([{"line": {"uid": "ln_free"}, "provider": f"exe:{IMAGE}@{DIGEST}", "status": "failed", "failure_code": "image_pull_timeout"}])
         self.fail(f"unexpected request: {req.method} {url}")
 
     def run_cli(self, *args, success=True, expected_error=None):
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(sys, "argv", [str(CLI), "--api-base", "https://api.example.test", "--token-file", "token", *args]):
+        token_args = ["--token-file", self.token_file] if self.token_file else []
+        with patch.object(sys, "argv", [str(CLI), "--api-base", "https://api.example.test", *token_args, *args]):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 try:
                     code = main()
@@ -102,12 +106,34 @@ class Smoke(unittest.TestCase):
             self.assertFalse(self.commands)
             self.assertFalse(self.requests)
 
+    def test_account_token_in_build_context(self):
+        Path("nested/plow").mkdir(parents=True)
+        account_file = Path("nested/plow/token").resolve()
+        account_file.write_text("synthetic-account")
+        for override in (str(account_file), None):
+            self.token_file = override
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(Path("nested").resolve())}):
+                self.run_cli("image", "build", success=False)
+                self.run_cli("deploy", "--local", success=False)
+            self.assertFalse(self.commands)
+            self.assertFalse(self.requests)
+
     def test_image_push(self):
         out, _ = self.run_cli("image", "push")
         self.assertEqual(out.strip(), f"{IMAGE}@{DIGEST}")
         self.assertEqual(tomllib.loads(Path("plow-agents.toml").read_text())["last_pushed"], f"{IMAGE}@{DIGEST}")
         self.assertEqual(self.commands, [["docker", "push", IMAGE + ":v1"]])
         self.assertFalse(self.requests)
+
+    def test_push_preserves_edits_made_during_push(self):
+        def pushing(argv, **kwargs):
+            Path("plow-agents.toml").write_text('slug = "edited"\nimage = "ghcr.io/example/other:v2"\n')
+            return self.docker(argv, **kwargs)
+        with patch("subprocess.run", side_effect=pushing):
+            self.run_cli("image", "push")
+        self.assertEqual(tomllib.loads(Path("plow-agents.toml").read_text()), {
+            "slug": "edited", "image": "ghcr.io/example/other:v2", "last_pushed": f"{IMAGE}@{DIGEST}",
+        })
 
     def test_failed_push_record_preserves_project(self):
         config = Path("plow-agents.toml")
@@ -116,7 +142,7 @@ class Smoke(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "replacement failed"):
                 self.run_cli("image", "push")
         self.assertEqual(config.read_bytes(), original)
-        self.assertEqual(sorted(p.name for p in Path(".").iterdir()), ["plow-agents.toml", "token"])
+        self.assertEqual(sorted(p.name for p in Path(".").iterdir()), ["plow-agents.toml"])
 
     def test_deploy(self):
         for target in (f"{IMAGE}@{DIGEST}", DIGEST, "exe:hermes"):
@@ -162,7 +188,7 @@ class Smoke(unittest.TestCase):
 
     def test_agents(self):
         out, _ = self.run_cli("agents")
-        self.assertEqual(out, f"LINE\tTARGET\tSTATUS\nln_free\t{IMAGE}@{DIGEST}\tfailed(pull_failed)\n")
+        self.assertEqual(out, f"LINE\tTARGET\tSTATUS\nln_free\t{IMAGE}@{DIGEST}\tfailed(image_pull_timeout)\n")
 
 
 if __name__ == "__main__":

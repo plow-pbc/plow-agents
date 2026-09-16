@@ -487,12 +487,15 @@ def image_repository(image: str) -> str:
     return f"{host}/{name.rsplit(':', 1)[0]}"
 
 
-def refuse_credentials() -> None:
+def refuse_credentials(args: argparse.Namespace) -> None:
+    account_file = os.path.realpath(token_path(args.token_file))
     def failed(error: OSError) -> NoReturn:
         die(f"cannot check build context for credentials: {error}")
     for directory, _, files in os.walk(".", onerror=failed):
         for filename in files:
             path = os.path.join(directory, filename)
+            if os.path.realpath(path) == account_file:
+                die(f"{path} is the account token -- move it outside the build context before building")
             try:
                 with open(path, "rb") as handle:
                     if any(line.lstrip().startswith((b"# plow-agent-uid:", b"PLOW_AGENT_TOKEN=")) for line in handle):
@@ -515,7 +518,7 @@ def docker(*arguments: str) -> str:
 
 
 def image_build(args: argparse.Namespace) -> None:
-    refuse_credentials()
+    refuse_credentials(args)
     docker("build", "--platform", "linux/amd64", "--tag", project_image(project()), ".")
 
 
@@ -527,6 +530,7 @@ def image_push(args: argparse.Namespace) -> None:
         die("docker push printed no sha256 digest")
     digest = found[-1]
     repository = image_repository(image)
+    settings = project()
     settings["last_pushed"] = f"{repository}@{digest}"
     write_private(CONFIG_FILE, "".join(f"{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in settings.items()))
     print(settings["last_pushed"])
@@ -536,7 +540,7 @@ def deploy(args: argparse.Namespace) -> None:
     if args.local:
         if args.target:
             die("--local takes no target; it builds this checkout's Compose project")
-        refuse_credentials()
+        refuse_credentials(args)
     else:
         if args.agent_api_base is not None:
             die("deploy --agent-api-base requires --local")
