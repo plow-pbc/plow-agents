@@ -396,11 +396,18 @@ def _cloud_target(target: str | None, settings: config.Config) -> tuple[str, str
 
 
 def _refuse_credential_in() -> None:
-    """A build reads this directory, and a credential in it is a live token for `COPY . .` to bake into a public image."""
-    credential = os.path.abspath(CREDENTIAL_FILE)
-    if os.path.exists(credential):
-        die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
-            "have confirmed whose it is, before building an image from this directory")
+    """Refuse any credential under this directory, at any depth.
+
+    A build hands docker the whole tree, so a credential minted in a
+    subdirectory is as much a live token for `COPY . .` to bake into a public
+    image as one sitting here. Walked rather than checked: the cost of reading
+    a directory tree is nothing next to the build that follows it.
+    """
+    for directory, _, names in os.walk("."):
+        if CREDENTIAL_FILE in names:
+            credential = os.path.abspath(os.path.join(directory, CREDENTIAL_FILE))
+            die(f"{credential} already exists -- retire that agent with `plow-agents revoke`, or remove the file once you "
+                "have confirmed whose it is, before building an image from this directory")
 
 
 def _deploy_local(ctx: typer.Context, this: State, *, target: str | None, line: str | None) -> None:

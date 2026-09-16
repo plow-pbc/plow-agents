@@ -198,15 +198,20 @@ def main() -> int:
         code, _, err = run("image", "build", cwd=work, base=base, token=token, docker=docker)
         check("a failed build is fatal", (code != 0, "build failed" in err), (True, True))
 
-        # A live credential here is a token `COPY . .` would bake in.
-        credentialled = os.path.join(work, "with-credential")
-        os.makedirs(credentialled)
-        with open(os.path.join(credentialled, "plow-credentials"), "w") as handle:
-            handle.write("PLOW_AGENT_TOKEN=plow_live\n")
-        docker = FakeDocker()
-        code, _, err = run("image", "build", cwd=credentialled, base=base, token=token, docker=docker)
-        check("build refuses a directory holding a credential, and docker never sees it",
-              (code != 0, "already exists" in err, docker.argvs), (True, True, []))
+        # A live credential anywhere under the build directory is a token
+        # `COPY . .` would bake in, however deep it was minted.
+        for label, where in (("holding", ""), ("with a credential minted in a child of", "child/deeper")):
+            credentialled = os.path.join(work, f"with-credential-{len(where)}")
+            os.makedirs(os.path.join(credentialled, where) if where else credentialled)
+            # A buildable directory, so the guard is the only thing that can stop it.
+            with open(os.path.join(credentialled, config.CONFIG_FILE), "w") as handle:
+                handle.write(f'image = "{IMAGE}"\n')
+            with open(os.path.join(credentialled, where, "plow-credentials"), "w") as handle:
+                handle.write("PLOW_AGENT_TOKEN=plow_live\n")
+            docker = FakeDocker()
+            code, _, err = run("image", "build", cwd=credentialled, base=base, token=token, docker=docker)
+            check(f"build refuses a directory {label} it, naming the file, and docker never sees it",
+                  (code != 0, os.path.join(where, "plow-credentials") in err, docker.argvs), (True, True, []))
 
         for written, want in (("ghcr.io/you/agent", ("ghcr.io", "you/agent")),
                               ("docker.io/you/agent", ("registry-1.docker.io", "you/agent")),
