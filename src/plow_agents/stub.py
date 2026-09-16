@@ -45,7 +45,6 @@ class Recorder:
 
     def __init__(self) -> None:
         self.events: list[str] = []
-        self.bad_auth: list[str] = []
         self.reply: str | None = None
         self.replied = threading.Event()
         # Set by any request, to any path, carrying this run's token.
@@ -126,7 +125,6 @@ class _Handler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         if self.stub.token is None or self.headers.get("Authorization") == f"Bearer {self.stub.token}":
             return True
-        self.stub.seen.bad_auth.append(f"{self.command} {self.path}")
         self._json(401, {"detail": "not this agent's token"}, close=True)
         return False
 
@@ -186,7 +184,6 @@ class _Handler(BaseHTTPRequestHandler):
         _, _, query = self.path.partition("?")
         ticket = dict(part.split("=", 1) for part in query.split("&") if "=" in part).get("ticket")
         if not key or ticket != self.stub.ticket:
-            self.stub.seen.bad_auth.append(f"WS {self.path}")
             return self._json(401, {"detail": "no ticket, or not this run's"})
         self.wfile.write(
             b"HTTP/1.1 101 Switching Protocols\r\n"
