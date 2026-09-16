@@ -136,6 +136,14 @@ class Smoke(unittest.TestCase):
         Path("Dockerfile.dockerignore").write_text("plow-credentials\n")
         self.run_cli("image", "build")
 
+    def test_build_scans_ignored_dockerfile(self):
+        Path(".dockerignore").write_text("Dockerfile\n")
+        Path("Dockerfile").write_text("FROM scratch\n# plow-agent-uid: agt_test\n")
+        self.run_cli("image", "build", success=False,
+                     expected_error="plow-agents: remove credentials from Dockerfile before building")
+        self.assertFalse(self.commands)
+        self.assertFalse(self.requests)
+
     def test_build_ignores_nested_credentials_and_account_token(self):
         Path("nested").mkdir()
         Path("nested/custom.env").write_text("# plow-agent-uid: agt_test\n")

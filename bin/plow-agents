@@ -536,7 +536,8 @@ def refuse_credentials(args: argparse.Namespace, ignore_file: str | None = None)
             for pattern, exclude in patterns:
                 if pattern.match(relative):
                     excluded = exclude
-            if excluded:
+            # Docker always reads the build Dockerfile, even when ignored.
+            if excluded and relative != "Dockerfile":
                 continue
             if os.path.realpath(path) == account_file:
                 die(f"add {relative} to {ignore_file} before building" if ignore_file else
@@ -544,6 +545,8 @@ def refuse_credentials(args: argparse.Namespace, ignore_file: str | None = None)
             try:
                 with open(path, "rb") as handle:
                     if any(line.lstrip().startswith((b"# plow-agent-uid:", b"PLOW_AGENT_TOKEN=")) for line in handle):
+                        if relative == "Dockerfile":
+                            die("remove credentials from Dockerfile before building")
                         die(f"add {relative} to {ignore_file} before building" if ignore_file else
                             f"{path} contains a credential -- revoke its agent and remove the credential before building")
             except OSError as error:
