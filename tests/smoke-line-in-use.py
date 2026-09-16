@@ -246,7 +246,7 @@ def main() -> int:
         Stub.requests.clear()
         listed = run("lines", cwd=work, base=base, token=token)
         check("lines exits 0", listed.returncode, 0)
-        check("lines reads owned chats and line occupancy without a key join", Stub.requests, ["GET /v1/chats", "GET /v1/lines"])
+        check("lines reads availability from line occupancy", Stub.requests, ["GET /v1/lines"])
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
         check("free line is free", rows.get(FREE), "free")
         check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
@@ -257,14 +257,15 @@ def main() -> int:
         Stub.chats["data"][0]["participants"].append({"type": "agent", "relationship": "peer", "line": {"uid": "ln_peer"}})
         Stub.chats["data"].append({"status": "pending", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": "ln_pending"}}]})
         listed = run("lines", cwd=work, base=base, token=token)
-        check("unowned, peer and pending lines are not advertised as mintable", listed.returncode == 0 and not any(row["uid"] in listed.stdout for row in extra_lines), True)
-        owned_chats = Stub.chats
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
+        check("free lines are listed regardless of chat membership or status", all(rows.get(row["uid"]) == "free" for row in extra_lines), True)
         Stub.chats = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
-        check("no active owned chat gives setup guidance despite service lines", "login --new-line" in empty.stderr and not empty.stdout, True)
+        rows = {row.split("\t")[0]: row.split("\t")[3] for row in empty.stdout.splitlines()}
+        check("chat-less free line is listed as free", empty.returncode == 0 and rows.get(FREE) == "free", True)
+        check("chat-less occupied lines still name their agents", (rows.get(CLOUD), rows.get(SELF_HOSTED)), ("agt_cloud", "agt_self_hosted"))
         logged_in = run("login", cwd=work, base=base, token=token)
-        check("login with no owned chat gives setup guidance", logged_in.returncode == 0 and "login --new-line" in logged_in.stderr, True)
-        Stub.chats = owned_chats
+        check("login with lines but no chats needs no new-line guidance", logged_in.returncode == 0 and "login --new-line" not in logged_in.stderr, True)
         credential = os.path.join(work, "plow-credentials")
         os.mkdir(credential)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
@@ -282,8 +283,10 @@ def main() -> int:
         check("occupied line is refused before any create", [r for r in Stub.requests if r.startswith("POST")], [])
         unknown = run("mint", "ln_nope", cwd=work, base=base, token=token)
         check("unknown line is refused by name", unknown.returncode != 0 and "unknown line:ln_nope" in unknown.stderr, True)
+        Stub.requests.clear()
         minted = run("mint", FREE, "--agent-api-base", "http://host.docker.internal:8000", cwd=work, base=base, token=token)
-        check("mint succeeds", minted.returncode, 0)
+        check("mint on a chat-less free line succeeds", minted.returncode, 0)
+        check("chat-less mint checks lines then creates the agent", Stub.requests, ["GET /v1/lines", "POST /v1/agents"])
         check("mint creates a self_hosted agent", Stub.minted[-1] if Stub.minted else None, {"name": "plow-agent", "provider": "self_hosted", "line_uid": FREE})
         if not os.path.isfile(credential):
             failures.append("mint did not create credential file")
@@ -449,6 +452,8 @@ def main() -> int:
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
         check("empty lines explain activation", "login --new-line" in empty.stderr, True)
+        logged_in = run("login", cwd=work, base=base, token=token)
+        check("login without lines still gives setup guidance", logged_in.returncode == 0 and "login --new-line" in logged_in.stderr, True)
 
     server.shutdown()
     for failure in failures:

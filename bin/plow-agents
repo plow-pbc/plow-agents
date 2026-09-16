@@ -194,17 +194,8 @@ def account_token(args: argparse.Namespace) -> str:
 
 
 def account_lines(base: str, token: str) -> list[dict]:
-    """Only lines on which this account owns an active chat can be minted."""
-    chats = call("GET", base, "/v1/chats", token=token)["data"]
-    owned = {
-        participant["line"]["uid"]
-        for chat in chats if chat["status"] == "active"
-        for participant in chat["participants"]
-        if participant["type"] == "agent" and participant["relationship"] == "self"
-    }
-    if not owned:
-        return []
-    return [line for line in call("GET", base, "/v1/lines", token=token)["data"] if line["uid"] in owned]
+    """Read account lines and their assistant occupancy from Plow."""
+    return call("GET", base, "/v1/lines", token=token)["data"]
 
 
 def login(args: argparse.Namespace) -> None:
