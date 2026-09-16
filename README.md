@@ -23,7 +23,7 @@ plow-agents lines
 Text the activation phrase to the number printed by `login`. Use `plow-agents login`
 if you already have a line. Keep the ID of a `free` line for step 5.
 
-## 2. Write the project file
+## 2. Write a Dockerfile
 
 Start with a Dockerfile for your agent. For example, if your Python agent starts
 from `agent.py`:
@@ -34,14 +34,9 @@ COPY agent.py /agent.py
 CMD ["python", "/agent.py"]
 ```
 
-Beside the Dockerfile, write `plow-agents.toml`.
-Replace `YOUR_ACCOUNT` with your registry account and `my-agent` with your agent's name.
+Keep credentials out of Git and image builds:
 
 ```sh
-cat > plow-agents.toml <<'TOML'
-slug = "my-agent"
-image = "ghcr.io/YOUR_ACCOUNT/my-agent:v1"
-TOML
 printf '\n/plow-credentials\n' >> .gitignore
 printf '\n/plow-credentials\n' >> .dockerignore
 ```
@@ -49,33 +44,31 @@ printf '\n/plow-credentials\n' >> .dockerignore
 ## 3. Build the image
 
 ```sh
-plow-agents image build
+plow-agents image build ghcr.io/YOUR_ACCOUNT/my-agent:v1
 ```
 
-This builds the current directory for `linux/amd64`, using the image tag in the project file.
+If ./plow-agents.toml has image = "…", you can omit the name.
 
 ## 4. Push the image
 
 ```sh
 docker login ghcr.io
-plow-agents image push
+plow-agents image push ghcr.io/YOUR_ACCOUNT/my-agent:v1
 ```
 
-The command prints the full `repository@sha256:…` reference and records it as
-`last_pushed` in the project file.
+Copy the full `repository@sha256:…` reference printed on the last line.
 
 ## 5. Request an agent
 
-Replace `ln_xxx` with the free line ID from step 1:
+Replace `ln_xxx` with the free line ID from step 1 and use the reference from step 4:
 
 ```sh
-plow-agents deploy --line ln_xxx
+plow-agents deploy ghcr.io/YOUR_ACCOUNT/my-agent@sha256:… --line ln_xxx
 plow-agents agents
 ```
 
-`deploy` uses the image reference recorded by `image push`. You can also pass an
-`image@sha256:…` reference or a `sha256:…` digest of the configured image.
-If your account has exactly one free line, `plow-agents deploy` selects it.
+You can also deploy a listing with `plow-agents deploy exe:hermes`.
+If your account has exactly one free line, `deploy` selects it.
 
 ## 6. Text it
 
@@ -135,9 +128,9 @@ plow-agents profile --show
 | `plow-agents mint LINE [--credential-file PATH] [--agent-api-base URL]` | Write a credential for a self-hosted agent. |
 | `plow-agents rotate [--credential-file PATH]` | Replace the credential; recreate the container to load it. |
 | `plow-agents revoke [LINE] [--credential-file PATH]` | Retire a self-hosted agent. |
-| `plow-agents image build` | Build the current directory for linux/amd64. |
-| `plow-agents image push` | Push and record the full image reference. |
-| `plow-agents deploy [TARGET] [--line LINE]` | Request the saved digest, a supplied digest, or an `exe:slug` listing. |
+| `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
+| `plow-agents image push [IMAGE]` | Push and print the full image reference. |
+| `plow-agents deploy TARGET [--line LINE]` | Request an image@sha256:… or an `exe:slug` listing. |
 | `plow-agents deploy --local [--line LINE] [--agent-api-base URL]` | Build, mint, and start Compose locally. |
 | `plow-agents agents` | Show tab-separated line, target, and status. |
 

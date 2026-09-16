@@ -8,7 +8,6 @@ import runpy
 import subprocess
 import sys
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -36,13 +35,13 @@ class Smoke(unittest.TestCase):
         self.addCleanup(os.chdir, self.previous)
         self.token_file = str(Path(self.directory.name) / "token")
         Path(self.token_file).write_text("synthetic-account")
-        Path("plow-agents.toml").write_text(f'slug = "agent"\nimage = "{IMAGE}:v1"\n')
+        Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\n')
         self.commands = []
         self.requests = []
         self.fail_revoke = False
         self.fail_up = False
         self.fail_build = False
-        self.compose_context = "."
+        self.compose_build = {"context": "."}
         self.created = []
         self.deleted = []
         self.docker_patch = patch("subprocess.run", side_effect=self.docker)
@@ -55,7 +54,7 @@ class Smoke(unittest.TestCase):
     def docker(self, argv, **kwargs):
         self.commands.append(argv)
         if argv[1:] == ["compose", "config", "--format", "json"]:
-            config = {"services": {"agent": {"build": {"context": self.compose_context}, "environment": {"SECRET": "synthetic-config-secret"}}}}
+            config = {"services": {"agent": {"build": self.compose_build, "environment": {"SECRET": "synthetic-config-secret"}}}}
             return subprocess.CompletedProcess(argv, 0, json.dumps(config))
         if argv[1:3] == ["compose", "build"]:
             self.assertFalse(Path("plow-credentials").exists())
@@ -122,46 +121,57 @@ class Smoke(unittest.TestCase):
             self.assertFalse(self.commands)
             self.assertFalse(self.requests)
 
-    def test_image_push(self):
-        out, _ = self.run_cli("image", "push")
-        self.assertEqual(out.strip(), f"{IMAGE}@{DIGEST}")
-        self.assertEqual(tomllib.loads(Path("plow-agents.toml").read_text())["last_pushed"], f"{IMAGE}@{DIGEST}")
-        self.assertEqual(self.commands, [["docker", "push", IMAGE + ":v1"]])
-        self.assertFalse(self.requests)
-
-    def test_push_preserves_edits_made_during_push(self):
-        def pushing(argv, **kwargs):
-            Path("plow-agents.toml").write_text('slug = "edited"\nimage = "ghcr.io/example/other:v2"\n')
-            return self.docker(argv, **kwargs)
-        with patch("subprocess.run", side_effect=pushing):
-            self.run_cli("image", "push")
-        self.assertEqual(tomllib.loads(Path("plow-agents.toml").read_text()), {
-            "slug": "edited", "image": "ghcr.io/example/other:v2", "last_pushed": f"{IMAGE}@{DIGEST}",
-        })
-
-    def test_failed_push_record_preserves_project(self):
+    def test_image_arguments_and_read_only_config(self):
         config = Path("plow-agents.toml")
+        for contents in (None, f'image = "{IMAGE}:v1"\n', 'not valid toml'):
+            for verb in ("build", "push"):
+                with self.subTest(contents=contents, verb=verb):
+                    if contents is None:
+                        config.unlink(missing_ok=True)
+                    else:
+                        config.write_text(contents)
+                    self.commands.clear()
+                    with patch("os.replace", side_effect=AssertionError("must not write")):
+                        out, _ = self.run_cli("image", verb, IMAGE + ":v2")
+                    self.assertIn(IMAGE + ":v2", self.commands[-1])
+                    if verb == "push":
+                        self.assertEqual(out.splitlines()[-1], f"{IMAGE}@{DIGEST}")
+                    self.assertEqual(config.read_text() if config.exists() else None, contents)
+                    self.assertEqual(list(Path(".").iterdir()), [config] if config.exists() else [])
+        config.write_text(f'image = "{IMAGE}:v1"\n')
         original = config.read_bytes()
-        with patch("os.replace", side_effect=OSError("replacement failed")):
-            with self.assertRaisesRegex(OSError, "replacement failed"):
-                self.run_cli("image", "push")
+        out, _ = self.run_cli("image", "push")
+        self.assertEqual(out.splitlines()[-1], f"{IMAGE}@{DIGEST}")
         self.assertEqual(config.read_bytes(), original)
-        self.assertEqual(sorted(p.name for p in Path(".").iterdir()), ["plow-agents.toml"])
+        config.unlink()
+        for verb in ("build", "push"):
+            self.run_cli("image", verb, success=False,
+                         expected_error="plow-agents: pass IMAGE or set image in ./plow-agents.toml")
+
+    def test_image_registry_host(self):
+        for host in ("localhost", "localhost:5000", "registry:5000", "registry:5.0"):
+            with self.subTest(host=host):
+                Path("plow-agents.toml").write_text(f'image = "{host}/agent:v1"\n')
+                self.run_cli("image", "build", success=False)
+                self.assertFalse(self.commands)
+        self.run_cli("image", "build", "registry.example:5000/agent:v1")
+        self.assertIn("registry.example:5000/agent:v1", self.commands[-1])
 
     def test_deploy(self):
-        for target in (f"{IMAGE}@{DIGEST}", DIGEST, "exe:hermes"):
-            _, err = self.run_cli("deploy", target)
+        Path("plow-agents.toml").write_text('not valid toml')
+        for target, name in ((f"{IMAGE}@{DIGEST}", "agent"), ("exe:hermes", "hermes")):
+            _, err = self.run_cli("deploy", target, "--line", "ln_explicit")
             self.assertIn("Requested", err)
-            self.assertEqual(self.created[-1]["provider"], target if target.startswith("exe:") else f"exe:{IMAGE}@{DIGEST}")
-            self.assertEqual(self.created[-1]["line_uid"], "ln_free")
-        self.run_cli("image", "push")
-        config = Path("plow-agents.toml")
-        config.write_text(config.read_text().replace(IMAGE + ":v1", "ghcr.io/example/other:v2"))
-        self.run_cli("deploy", "--line", "ln_explicit")
-        self.assertEqual(self.created[-1], {"name": "agent", "line_uid": "ln_explicit", "provider": f"exe:{IMAGE}@{DIGEST}"})
+            self.assertEqual(self.created[-1], {
+                "name": name, "line_uid": "ln_explicit",
+                "provider": target if target.startswith("exe:") else f"exe:{IMAGE}@{DIGEST}",
+            })
         self.created.clear()
-        self.run_cli("deploy", IMAGE + ":v1", success=False)
-        self.assertFalse(self.created)
+        self.requests.clear()
+        Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\nlast_pushed = "{IMAGE}@{DIGEST}"\n')
+        for target in ((), (DIGEST,), (IMAGE + ":v1",)):
+            self.run_cli("deploy", *target, success=False)
+            self.assertFalse(self.requests)
 
     def test_deploy_local(self):
         self.fail_build = True
@@ -182,22 +192,19 @@ class Smoke(unittest.TestCase):
         self.assertEqual(self.deleted, ["https://api.example.test/v1/agents/agt_test"])
         self.assertFalse(Path("plow-credentials").exists())
 
-    def test_local_refuses_external_compose_context(self):
-        self.compose_context = ".."
-        out, err = self.run_cli("deploy", "--local", success=False,
-                              expected_error="plow-agents: Compose build context must stay inside this checkout")
-        self.assertNotIn("synthetic-config-secret", out + err)
-        self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"]])
-        self.assertFalse(self.created)
-        self.assertFalse(Path("plow-credentials").exists())
-
-    def test_local_refuses_remote_compose_context(self):
-        for context in ("https://example.com/agent.git", "git@example.com:agent.git"):
-            with self.subTest(context=context):
-                self.compose_context = context
+    def test_local_refuses_unsafe_compose_contexts(self):
+        cases = [
+            ({"context": ".."}, "Compose build context must stay inside this checkout"),
+            ({"context": "https://example.com/agent.git"}, "Compose build context must be a filesystem path"),
+            ({"context": "git@example.com:agent.git"}, "Compose build context must be a filesystem path"),
+            ({"context": ".", "additional_contexts": {"outside": ".."}}, "Compose build.additional_contexts is not supported"),
+        ]
+        for build, error in cases:
+            with self.subTest(build=build):
+                self.compose_build = build
                 self.commands.clear()
                 out, err = self.run_cli("deploy", "--local", success=False,
-                                      expected_error="plow-agents: Compose build context must be a filesystem path")
+                                      expected_error="plow-agents: " + error)
                 self.assertNotIn("synthetic-config-secret", out + err)
                 self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"]])
                 self.assertFalse(self.created)
