@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 CLI = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "plow-agents")
 
-FREE, CLOUD, SELF_HOSTED = "ln_free", "ln_cloud", "ln_self_hosted"
+FREE, CLOUD, SELF_HOSTED, OTHER = "ln_free", "ln_cloud", "ln_self_hosted", "ln_other"
 PHOTO_URL = "https://api.example.com/v1/profile-photos/2b0f9c1e-0000-4000-8000-000000000001"
 
 
@@ -34,8 +34,10 @@ def line(uid: str, name: str) -> dict:
 
 LINES = {"data": [dict(line(uid, name), agent_uid=agent_uid) for uid, name, agent_uid in (
     (FREE, "Free", None), (CLOUD, "Cloud", "agt_cloud"), (SELF_HOSTED, "Self hosted", "agt_self_hosted"),
+    (OTHER, "Other account", "agt_other"),
 )]}
 AGENTS = {
+    "agt_other": {"uid": "agt_other", "provider": "self_hosted"},
     "agt_cloud": {"uid": "agt_cloud", "provider": "exe:life"},
     "agt_self_hosted": {"uid": "agt_self_hosted", "provider": "self_hosted"},
 }
@@ -43,6 +45,7 @@ AGENTS = {
 
 class Stub(BaseHTTPRequestHandler):
     lines: dict = LINES
+    include_available = True
     agent_get_status = 200
     chats = {"data": [{"status": "active", "participants": [{"type": "agent", "relationship": "self", "line": {"uid": uid}}]} for uid in (FREE, CLOUD, SELF_HOSTED)]}
     rotate_status = 200
@@ -68,7 +71,16 @@ class Stub(BaseHTTPRequestHandler):
         if self.path == "/v1/chats":
             return self._send(200, Stub.chats)
         if self.path == "/v1/lines":
-            return self._send(200, Stub.lines)
+            other_account = self.headers.get("Authorization") == "Bearer acct_other"
+            rows = []
+            for stored in Stub.lines["data"]:
+                row = dict(stored)
+                if Stub.include_available:
+                    row["available"] = not bool(stored["agent_uid"])
+                if (stored["agent_uid"] == "agt_other") != other_account:
+                    row["agent_uid"] = None
+                rows.append(row)
+            return self._send(200, {"data": rows})
         if self.path.startswith("/v1/agents/"):
             agent = AGENTS.get(self.path.rsplit("/", 1)[1])
             return self._send(Stub.agent_get_status if agent else 404, agent)
@@ -252,6 +264,27 @@ def main() -> int:
         check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
         check("self_hosted line names its agent", rows.get(SELF_HOSTED), "agt_self_hosted")
 
+        check("another account's held line is in use", rows.get(OTHER), "in use")
+        other_token = os.path.join(work, "other-token")
+        with open(other_token, "w") as handle:
+            handle.write("acct_other\n")
+        other_listed = run("lines", cwd=work, base=base, token=other_token)
+        other_rows = {row.split("\t")[0]: row.split("\t")[3] for row in other_listed.stdout.splitlines()}
+        check("second account sees its own holder", other_rows.get(OTHER), "agt_other")
+        check("second account sees the first account's line in use", other_rows.get(CLOUD), "in use")
+        check("both accounts see the unheld line as free", other_rows.get(FREE), "free")
+        for held_line, caller_token in ((OTHER, token), (CLOUD, other_token)):
+            Stub.requests.clear()
+            refused = run("mint", held_line, cwd=work, base=base, token=caller_token)
+            check("another account's line is refused before create", refused.returncode != 0 and Stub.requests == ["GET /v1/lines"], True)
+            check("cross-account refusal creates no credential", os.path.exists(os.path.join(work, "plow-credentials")), False)
+        Stub.include_available = False
+        Stub.requests.clear()
+        refused = run("mint", OTHER, cwd=work, base=base, token=token)
+        check("missing availability lets the API decide", refused.returncode != 0 and "POST /v1/agents" in Stub.requests, True)
+        check("API refusal leaves no credential", os.path.exists(os.path.join(work, "plow-credentials")), False)
+        Stub.include_available = True
+
         extra_lines = [dict(line(uid, uid), agent_uid=None) for uid in ("ln_unowned", "ln_peer", "ln_pending")]
         Stub.lines["data"].extend(extra_lines)
         Stub.chats["data"][0]["participants"].append({"type": "agent", "relationship": "peer", "line": {"uid": "ln_peer"}})
@@ -264,8 +297,9 @@ def main() -> int:
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in empty.stdout.splitlines()}
         check("chat-less free line is listed as free", empty.returncode == 0 and rows.get(FREE) == "free", True)
         check("chat-less occupied lines still name their agents", (rows.get(CLOUD), rows.get(SELF_HOSTED)), ("agt_cloud", "agt_self_hosted"))
+        Stub.requests.clear()
         logged_in = run("login", cwd=work, base=base, token=token)
-        check("login with lines but no chats needs no new-line guidance", logged_in.returncode == 0 and "login --new-line" not in logged_in.stderr, True)
+        check("login finishes without checking pool lines", logged_in.returncode == 0 and Stub.requests == ["POST /v1/auth/activate", "POST /v1/auth/activate/redeem"], True)
         credential = os.path.join(work, "plow-credentials")
         os.mkdir(credential)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
@@ -451,9 +485,9 @@ def main() -> int:
         Stub.delete_status = 200
         Stub.lines = {"data": []}
         empty = run("lines", cwd=work, base=base, token=token)
-        check("empty lines explain activation", "login --new-line" in empty.stderr, True)
+        check("empty pool prints an empty table without activation guidance", empty.returncode == 0 and len(empty.stdout.splitlines()) == 1 and not empty.stderr, True)
         logged_in = run("login", cwd=work, base=base, token=token)
-        check("login without lines still gives setup guidance", logged_in.returncode == 0 and "login --new-line" in logged_in.stderr, True)
+        check("login without pool lines does not suggest creating one", logged_in.returncode == 0 and "login --new-line" not in logged_in.stderr, True)
 
     server.shutdown()
     for failure in failures:

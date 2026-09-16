@@ -194,7 +194,7 @@ def account_token(args: argparse.Namespace) -> str:
 
 
 def account_lines(base: str, token: str) -> list[dict]:
-    """Read account lines and their assistant occupancy from Plow."""
+    """Read pool lines and their assistant occupancy from Plow."""
     return call("GET", base, "/v1/lines", token=token)["data"]
 
 
@@ -225,11 +225,6 @@ def login(args: argparse.Namespace) -> None:
                 die("activation verified but returned no token")
             written = write_private(token_path(args.token_file), token + "\n")
             log(f"Wrote {written} (mode 600). This is your ACCOUNT token -- it stays here.")
-            # Now that a token is in hand, this account can be asked about
-            # itself -- and `mint` has nothing to scope a credential to
-            # without a line, so say so here rather than two verbs later.
-            if not account_lines(args.api_base, token):
-                log("This account holds no assistant line yet: run `plow-agents login --new-line` to be given one.")
             return
         time.sleep(POLL_S)
     die(f"timed out after {TIMEOUT_S}s waiting for the text")
@@ -238,13 +233,9 @@ def login(args: argparse.Namespace) -> None:
 def lines(args: argparse.Namespace) -> None:
     token = account_token(args)
     available = account_lines(args.api_base, token)
-    if not available:
-        log("No assistant lines on this account yet.")
-        log("Run `plow-agents login --new-line` to be given one.")
-        return
     print("LINE\tNAME\tNUMBER\tSTATUS")
     for line in sorted(available, key=lambda line: line["uid"]):
-        status = line["agent_uid"] or "free"
+        status = line["agent_uid"] or ("in use" if line.get("available") is False else "free")
         print(f"{line['uid']}\t{line.get('display_name') or ''}\t{line.get('provider_key') or ''}\t{status}")
 
 
@@ -380,6 +371,8 @@ def mint(args: argparse.Namespace) -> None:
             else "retire that agent before minting here"
         )
         die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- {remedy}")
+    if line.get("available") is False:
+        die(f"line:{line_uid} is in use by another account -- choose a free line")
     minted = call("POST", args.api_base, "/v1/agents", token=account,
                   body={"name": "plow-agent", "provider": "self_hosted", "line_uid": line_uid})
     agent, token = minted["agent"], minted["token"]
