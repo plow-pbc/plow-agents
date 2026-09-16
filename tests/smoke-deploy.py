@@ -39,8 +39,6 @@ class Smoke(unittest.TestCase):
         self.commands = []
         self.requests = []
         self.fail_up = False
-        self.fail_build = False
-        self.compose_build = {"context": "."}
         self.created = []
         self.deleted = []
         self.docker_patch = patch("subprocess.run", side_effect=self.docker)
@@ -52,15 +50,9 @@ class Smoke(unittest.TestCase):
 
     def docker(self, argv, **kwargs):
         self.commands.append(argv)
-        if argv[1:] == ["compose", "config", "--format", "json"]:
-            config = {"services": {"agent": {"build": self.compose_build, "environment": {"SECRET": "synthetic-config-secret"}}}}
-            return subprocess.CompletedProcess(argv, 0, json.dumps(config))
-        if argv[1:3] == ["compose", "build"]:
-            self.assertFalse(Path("plow-credentials").exists())
-            self.assertFalse(self.created)
         if argv[1:3] == ["compose", "up"]:
             self.assertIn("PLOW_AGENT_TOKEN=synthetic-agent", Path("plow-credentials").read_text())
-        return subprocess.CompletedProcess(argv, int((self.fail_up and "up" in argv) or (self.fail_build and "build" in argv)), f"v1: digest: {DIGEST} size: 123\n")
+        return subprocess.CompletedProcess(argv, int(self.fail_up), f"v1: digest: {DIGEST} size: 123\n", stderr="compose startup failed: fixture error\n" if self.fail_up else "")
 
     def http(self, req, *args, **kwargs):
         self.requests.append(req)
@@ -223,47 +215,29 @@ class Smoke(unittest.TestCase):
         fixture = Path("tests/__pycache__/test_plow_init.cpython-311.pyc")
         fixture.parent.mkdir(parents=True)
         fixture.write_bytes(b"\x00\nPLOW_AGENT_TOKEN=synthetic-fixture\n")
-        self.fail_build = True
-        self.run_cli("deploy", "--local", success=False)
-        self.assertFalse(self.created)
-        self.assertFalse(Path("plow-credentials").exists())
-        self.fail_build = False
-        self.commands.clear()
-        out, err = self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
-        self.assertNotIn("synthetic-config-secret", out + err)
+        self.run_cli("deploy", "--local", "--agent-api-base", "http://host.docker.internal:8000/v1")
         self.assertIn("PLOW_API_BASE=http://host.docker.internal:8000\n", Path("plow-credentials").read_text())
-        self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"], ["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
+        self.assertEqual(self.commands, [["docker", "compose", "up", "-d"]])
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
 
-    def test_local_refuses_unsafe_compose_contexts(self):
-        cases = [
-            ({"context": ".."}, "Compose build context must stay inside this checkout"),
-            ({"context": "https://example.com/agent.git"}, "Compose build context must be a filesystem path"),
-            ({"context": "git@example.com:agent.git"}, "Compose build context must be a filesystem path"),
-            ({"context": ".", "additional_contexts": {"outside": ".."}}, "Compose build.additional_contexts is not supported"),
-        ]
-        for build, error in cases:
-            with self.subTest(build=build):
-                self.compose_build = build
-                self.commands.clear()
-                out, err = self.run_cli("deploy", "--local", success=False,
-                                      expected_error="plow-agents: " + error)
-                self.assertNotIn("synthetic-config-secret", out + err)
-                self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"]])
-                self.assertFalse(self.created)
-                self.assertFalse(Path("plow-credentials").exists())
+    def test_docker_failure_prints_stderr(self):
+        self.fail_up = True
+        for verb in ("build", "push"):
+            _, err = self.run_cli("image", verb, success=False)
+            self.assertIn("compose startup failed: fixture error", err)
 
     def test_local_startup_failure_preserves_agent_and_credential(self):
         self.fail_up = True
         _, err = self.run_cli("deploy", "--local", success=False,
-                              expected_error="plow-agents: docker compose up --no-build -d failed (1)")
+                              expected_error="plow-agents: docker compose up -d failed (1)")
+        self.assertIn("compose startup failed: fixture error", err)
         self.assertFalse(self.deleted)
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
         self.assertEqual(Path("plow-credentials").read_text(),
                          "PLOW_API_BASE=https://api.example.test\nPLOW_AGENT_TOKEN=synthetic-agent\n# plow-agent-uid: agt_test\n")
         self.assertIn("Agent and plow-credentials kept", err)
         self.assertIn("plow-agents revoke", err)
-        self.assertIn("docker compose up --no-build -d", err)
+        self.assertIn("docker compose up -d", err)
 
     def test_agents(self):
         out, _ = self.run_cli("agents")

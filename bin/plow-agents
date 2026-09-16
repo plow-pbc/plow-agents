@@ -544,15 +544,16 @@ def refuse_credentials(args: argparse.Namespace, ignore_file: str) -> None:
                 failed(error)
 
 
-def docker(*arguments: str, quiet: bool = False) -> str:
+def docker(*arguments: str) -> str:
     command = ["docker", *arguments]
     log("$ " + " ".join(command))
     try:
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE if quiet else subprocess.STDOUT, text=True, check=False)
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
     except OSError as error:
         die(f"cannot run docker: {error}")
-    if not quiet:
-        log(result.stdout.rstrip())
+    log(result.stdout.rstrip())
+    if result.stderr:
+        log(result.stderr.rstrip())
     if result.returncode:
         die(f"docker {' '.join(arguments)} failed ({result.returncode})")
     return result.stdout
@@ -575,7 +576,7 @@ def image_push(args: argparse.Namespace) -> None:
 def deploy(args: argparse.Namespace) -> None:
     if args.local:
         if args.target:
-            die("--local takes no target; it builds this checkout's Compose project")
+            die("--local takes no target; it starts this checkout's Compose project")
     else:
         if args.agent_api_base is not None:
             die("deploy --agent-api-base requires --local")
@@ -598,26 +599,13 @@ def deploy(args: argparse.Namespace) -> None:
             die("pass --line with a free line from `plow-agents lines` (or login --new-line to get one)")
         args.line = free[0]
     if args.local:
-        config = json.loads(docker("compose", "config", "--format", "json", quiet=True))
-        checkout = os.path.realpath(".")
-        for service in config["services"].values():
-            build = service.get("build", {})
-            if build.get("additional_contexts"):
-                die("Compose build.additional_contexts is not supported")
-            context = build.get("context", ".")
-            if "://" in context or context.startswith("git@"):
-                die("Compose build context must be a filesystem path")
-            context = os.path.realpath(context)
-            if context != checkout and not context.startswith(checkout + os.sep):
-                die("Compose build context must stay inside this checkout")
-        docker("compose", "build")
         args.credential_file = CREDENTIAL_FILE
         mint(args)
         try:
-            docker("compose", "up", "--no-build", "-d")
+            docker("compose", "up", "-d")
         except (SystemExit, KeyboardInterrupt):
             log("Compose up did not complete. Agent and plow-credentials kept. "
-                "Fix Compose and run `docker compose up --no-build -d`, "
+                "Fix Compose and run `docker compose up -d`, "
                 "or run `plow-agents revoke` to retire the agent.")
             raise
         log("Requested local agent. Run `docker compose logs -f` to watch startup.")
@@ -681,7 +669,7 @@ def main() -> int:
     it = verbs.add_parser("deploy", help="request an agent on a line")
     it.add_argument("target", nargs="?", help="image@sha256:... or exe:<slug>")
     it.add_argument("--line", help="line uid (default: the only free line)")
-    it.add_argument("--local", action="store_true", help="build, mint, and start this Compose project")
+    it.add_argument("--local", action="store_true", help="mint a credential and start this Compose project")
     it.add_argument("--agent-api-base", default=None, help="with --local, the API root the container reaches (default: --api-base)")
     it.set_defaults(run=deploy)
     verbs.add_parser("agents", help="list agent targets and status").set_defaults(run=agents)
