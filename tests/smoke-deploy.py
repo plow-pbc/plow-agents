@@ -38,7 +38,6 @@ class Smoke(unittest.TestCase):
         Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\n')
         self.commands = []
         self.requests = []
-        self.fail_revoke = False
         self.fail_up = False
         self.fail_build = False
         self.compose_build = {"context": "."}
@@ -76,7 +75,7 @@ class Smoke(unittest.TestCase):
             return Response({"agent": {"uid": "agt_test"}, "token": "synthetic-agent"})
         if req.method == "DELETE":
             self.deleted.append(url)
-            return Response({}, 500 if self.fail_revoke else 200)
+            return Response({})
         if url.endswith("/agt_test"):
             return Response({"provider": "self_hosted"})
         if url.endswith("/v1/agents"):
@@ -226,12 +225,6 @@ class Smoke(unittest.TestCase):
         self.assertIn("PLOW_API_BASE=http://host.docker.internal:8000\n", Path("plow-credentials").read_text())
         self.assertEqual(self.commands, [["docker", "compose", "config", "--format", "json"], ["docker", "compose", "build"], ["docker", "compose", "up", "--no-build", "-d"]])
         self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
-        Path("plow-credentials").unlink()
-        self.created.clear()
-        self.fail_up = True
-        self.run_cli("deploy", "--local", success=False)
-        self.assertEqual(self.deleted, ["https://api.example.test/v1/agents/agt_test"])
-        self.assertFalse(Path("plow-credentials").exists())
 
     def test_local_refuses_unsafe_compose_contexts(self):
         cases = [
@@ -251,14 +244,17 @@ class Smoke(unittest.TestCase):
                 self.assertFalse(self.created)
                 self.assertFalse(Path("plow-credentials").exists())
 
-    def test_local_cleanup_failure_preserves_startup_error(self):
-        self.fail_up = self.fail_revoke = True
+    def test_local_startup_failure_preserves_agent_and_credential(self):
+        self.fail_up = True
         _, err = self.run_cli("deploy", "--local", success=False,
                               expected_error="plow-agents: docker compose up --no-build -d failed (1)")
-        self.assertIn("agent may still be live", err)
-        self.assertIn("HTTP 500", err)
-        self.assertTrue(Path("plow-credentials").exists())
-        self.assertEqual(self.deleted, ["https://api.example.test/v1/agents/agt_test"])
+        self.assertFalse(self.deleted)
+        self.assertEqual(self.created, [{"name": "plow-agent", "provider": "self_hosted", "line_uid": "ln_free"}])
+        self.assertEqual(Path("plow-credentials").read_text(),
+                         "PLOW_API_BASE=https://api.example.test\nPLOW_AGENT_TOKEN=synthetic-agent\n# plow-agent-uid: agt_test\n")
+        self.assertIn("Agent and plow-credentials kept", err)
+        self.assertIn("plow-agents revoke", err)
+        self.assertIn("docker compose up --no-build -d", err)
 
     def test_agents(self):
         out, _ = self.run_cli("agents")
