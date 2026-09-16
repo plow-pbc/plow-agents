@@ -316,7 +316,9 @@ docker compose down -v
 To build your own: your repository owns `compose.yml` — copy
 [compose.example.yml](compose.example.yml) beside your Dockerfile, start your Dockerfile with
 `FROM` the [plow-hermes-agent base image](https://github.com/plow-pbc/plow-hermes-agent), and add
-`/plow-credentials` to both `.gitignore` and `.dockerignore`.
+`/plow-credentials` to both `.gitignore` and `.dockerignore`. The example loads that file with
+`env_file`, which is how the base image expects to be told where Plow is: the container comes up
+with `PLOW_API_BASE` and its token in the environment, the same two the cloud provides.
 
 ---
 
