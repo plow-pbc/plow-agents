@@ -369,11 +369,10 @@ Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 - **`login` is per-account, not per-agent.** The account token can list lines, mint, rotate,
   revoke and deploy. It never enters a container; only a minted credential does.
 - **`down -v` is not the same as `down`.** `down` keeps a self-hosted agent's memory; `down -v`
-  starts it fresh and is what picks up image changes to `SOUL.md`.
+  starts it fresh. An edit to `SOUL.md` does not need it: the base image composes the identity into
+  the agent's home on every boot.
 - **Stale ECR Public credentials 403 on a pull** that should be anonymous. `docker logout
   public.ecr.aws`, then try again.
-- **`up` before `mint`** leaves Docker having created `plow-credentials` as a *directory*. Run
-  `docker compose down -v && rmdir plow-credentials`, then mint.
 
 # Reference
 

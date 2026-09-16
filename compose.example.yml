@@ -6,7 +6,12 @@ services:
     # `plow-agents mint <line>` writes, loaded as environment. exe.dev sets
     # PLOW_API_BASE alone and injects the token at its proxy; here nothing
     # sits in between, so the token comes along.
-    env_file: ./plow-credentials
+    env_file:
+      # Optional, because `deploy --local` builds before it mints: on a first
+      # run this file does not exist yet when Compose reads the project, and a
+      # build does not need it. `up` comes after the mint, and does.
+      - path: ./plow-credentials
+        required: false
     volumes:
       # The agent's home, kept across `up`/`down` for its sessions and setup.
       # `docker compose down -v` starts this agent fresh.
