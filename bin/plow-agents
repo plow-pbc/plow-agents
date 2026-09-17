@@ -201,6 +201,22 @@ def pool_lines(base: str, token: str) -> list[dict]:
     return call("GET", base, "/v1/lines", token=token)["data"]
 
 
+def is_phone_line(line: dict) -> bool:
+    """Whether this line is a phone number an agent can be minted on.
+
+    `/v1/lines` serves mailboxes beside phone numbers, both with a
+    `provider_type` -- `imessage` or `email`. An agent is minted on a phone
+    line; a mailbox is reached through the persona it shares a name with, and
+    has no credential of its own to hand out.
+
+    Absent reads as a phone line rather than a mailbox. The field is required
+    by the API's own schema, so it is missing only against something older than
+    it -- and hiding every line from an operator who does have phone lines is a
+    worse answer than showing one they cannot use.
+    """
+    return line.get("provider_type", "imessage") == "imessage"
+
+
 def login(args: argparse.Namespace) -> None:
     payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": "plow-agents"})
     code, secret, send_to = (payload.get(k, "") for k in ("display_code", "activation_secret", "send_to"))
@@ -230,7 +246,7 @@ def login(args: argparse.Namespace) -> None:
 
 def lines(args: argparse.Namespace) -> None:
     token = account_token(args)
-    available = pool_lines(args.api_base, token)
+    available = [row for row in pool_lines(args.api_base, token) if is_phone_line(row)]
     print("LINE\tNAME\tNUMBER\tSTATUS")
     for line in sorted(available, key=lambda line: line["uid"]):
         status = line["agent_uid"] or ({True: "free", False: "in use"}.get(line.get("available"), "unknown"))
@@ -355,6 +371,11 @@ def mint(args: argparse.Namespace) -> None:
     line = next((row for row in pool_lines(args.api_base, account) if row["uid"] == line_uid), None)
     if line is None:
         die(f"unknown line:{line_uid}")
+    # Before the occupancy checks, not after: a mailbox that happens to be free
+    # would otherwise read as mintable right up to the create, and one that
+    # happens to be held would be refused for the wrong reason.
+    if not is_phone_line(line):
+        die(f"line:{line_uid} is not a phone line -- `plow-agents lines` lists the ones an agent can answer on")
     if line["agent_uid"]:
         die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- retire it with `plow-agents revoke {line_uid}`")
     if line.get("available") is False:
