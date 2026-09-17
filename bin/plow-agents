@@ -209,12 +209,12 @@ def is_phone_line(line: dict) -> bool:
     line; a mailbox is reached through the persona it shares a name with, and
     has no credential of its own to hand out.
 
-    Absent reads as a phone line rather than a mailbox. The field is required
-    by the API's own schema, so it is missing only against something older than
-    it -- and hiding every line from an operator who does have phone lines is a
-    worse answer than showing one they cannot use.
+    Indexed, not `.get`: the field is required by the API's schema, so a row
+    without one is a response this tool does not understand, and guessing at
+    the type of a line it is about to put an agent on is the wrong kind of
+    forgiving. A KeyError naming the field is the honest answer.
     """
-    return line.get("provider_type", "imessage") == "imessage"
+    return line["provider_type"] == "imessage"
 
 
 def login(args: argparse.Namespace) -> None:
@@ -609,6 +609,15 @@ def deploy(args: argparse.Namespace) -> None:
             raise
         log("Requested local agent. Run `docker compose logs -f` to watch startup.")
     else:
+        # The same two checks `mint` makes, and for the same reason: a remote
+        # deploy is the one path that reaches `POST /v1/agents` without going
+        # through it, so a typo'd uid or a mailbox got a server error instead of
+        # a sentence naming what was wrong.
+        line = next((row for row in pool_lines(args.api_base, token) if row["uid"] == args.line), None)
+        if line is None:
+            die(f"unknown line:{args.line}")
+        if not is_phone_line(line):
+            die(f"line:{args.line} is not a phone line -- `plow-agents lines` lists the ones an agent can answer on")
         created = call("POST", args.api_base, "/v1/agents", token=token,
                        body={"name": name, "line_uid": args.line, "provider": provider})
         log(f"Requested agent {created['agent']['uid']} on line:{args.line}. Run `plow-agents agents` for status.")
