@@ -202,12 +202,7 @@ def pool_lines(base: str, token: str) -> list[dict]:
 
 
 def login(args: argparse.Namespace) -> None:
-    # `provision_chat` asks for a line and a chat on it in the same handshake:
-    # a real change to the account, and one nothing here can undo. So it is
-    # asked for only when you say so. Nothing on this machine can decide it
-    # either -- a cached token is evidence about whoever logged in last, which
-    # need not be the account about to text the code below.
-    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": "plow-agents", "provision_chat": args.new_line})
+    payload = call("POST", args.api_base, "/v1/auth/activate", body={"name": "plow-agents"})
     code, secret, send_to = (payload.get(k, "") for k in ("display_code", "activation_secret", "send_to"))
     if not (code and secret and send_to):
         die("activation returned no code, secret or number")
@@ -616,7 +611,6 @@ def main() -> int:
     verbs = parser.add_subparsers(dest="verb", required=True)
 
     it = verbs.add_parser("login", help="text a code, store this account's token")
-    it.add_argument("--new-line", action="store_true", help="also provision a chat during activation; not required to select a pool line")
     it.set_defaults(run=login)
 
     verbs.add_parser("lines", help="the global pool of lines and their availability").set_defaults(run=lines)
