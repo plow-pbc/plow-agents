@@ -202,19 +202,17 @@ def pool_lines(base: str, token: str) -> list[dict]:
 
 
 def is_phone_line(line: dict) -> bool:
-    """Whether this line is a phone number an agent can be minted on.
-
-    `/v1/lines` serves mailboxes beside phone numbers, both with a
-    `provider_type` -- `imessage` or `email`. An agent is minted on a phone
-    line; a mailbox is reached through the persona it shares a name with, and
-    has no credential of its own to hand out.
-
-    Indexed, not `.get`: the field is required by the API's schema, so a row
-    without one is a response this tool does not understand, and guessing at
-    the type of a line it is about to put an agent on is the wrong kind of
-    forgiving. A KeyError naming the field is the honest answer.
-    """
+    """Whether an agent can be deployed on this line."""
     return line["provider_type"] == "imessage"
+
+
+def require_phone_line(base: str, token: str, uid: str) -> dict:
+    line = next((row for row in pool_lines(base, token) if row["uid"] == uid), None)
+    if line is None:
+        die(f"unknown line:{uid}")
+    if not is_phone_line(line):
+        die(f"line:{uid} is not a phone line -- `plow-agents lines` lists the ones an agent can answer on")
+    return line
 
 
 def login(args: argparse.Namespace) -> None:
@@ -368,14 +366,7 @@ def mint(args: argparse.Namespace) -> None:
     # tell which replied, so the line is checked here, before anything is
     # created. There is no flag to proceed anyway: retire the agent that holds
     # it first, which is a decision rather than a keystroke.
-    line = next((row for row in pool_lines(args.api_base, account) if row["uid"] == line_uid), None)
-    if line is None:
-        die(f"unknown line:{line_uid}")
-    # Before the occupancy checks, not after: a mailbox that happens to be free
-    # would otherwise read as mintable right up to the create, and one that
-    # happens to be held would be refused for the wrong reason.
-    if not is_phone_line(line):
-        die(f"line:{line_uid} is not a phone line -- `plow-agents lines` lists the ones an agent can answer on")
+    line = require_phone_line(args.api_base, account, line_uid)
     if line["agent_uid"]:
         die(f"line:{line_uid} already answers as agent {line['agent_uid']} -- retire it with `plow-agents revoke {line_uid}`")
     if line.get("available") is False:
@@ -609,15 +600,7 @@ def deploy(args: argparse.Namespace) -> None:
             raise
         log("Requested local agent. Run `docker compose logs -f` to watch startup.")
     else:
-        # The same two checks `mint` makes, and for the same reason: a remote
-        # deploy is the one path that reaches `POST /v1/agents` without going
-        # through it, so a typo'd uid or a mailbox got a server error instead of
-        # a sentence naming what was wrong.
-        line = next((row for row in pool_lines(args.api_base, token) if row["uid"] == args.line), None)
-        if line is None:
-            die(f"unknown line:{args.line}")
-        if not is_phone_line(line):
-            die(f"line:{args.line} is not a phone line -- `plow-agents lines` lists the ones an agent can answer on")
+        require_phone_line(args.api_base, token, args.line)
         created = call("POST", args.api_base, "/v1/agents", token=token,
                        body={"name": name, "line_uid": args.line, "provider": provider})
         log(f"Requested agent {created['agent']['uid']} on line:{args.line}. Run `plow-agents agents` for status.")
@@ -643,7 +626,7 @@ def main() -> int:
     it = verbs.add_parser("login", help="text a code, store this account's token")
     it.set_defaults(run=login)
 
-    verbs.add_parser("lines", help="the global pool of lines and their availability").set_defaults(run=lines)
+    verbs.add_parser("lines", help="phone lines an agent can be deployed on, with availability").set_defaults(run=lines)
 
     it = verbs.add_parser("profile", help="set or show this account's public profile")
     it.add_argument("--name", help="public display name")
