@@ -58,7 +58,7 @@ class Smoke(unittest.TestCase):
         self.requests.append(req)
         url = req.full_url
         self.assertEqual(req.get_header("Authorization"), "Bearer synthetic-account")
-        if url.endswith("/v1/lines"):
+        if url.endswith("/v1/lines?include_mailboxes=false"):
             return Response({"data": [{"uid": "ln_free", "agent_uid": None}]})
         if req.method == "POST":
             self.created.append(json.loads(req.data))

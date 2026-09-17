@@ -198,7 +198,7 @@ def account_token(args: argparse.Namespace) -> str:
 
 def pool_lines(base: str, token: str) -> list[dict]:
     """Read pool lines and their assistant occupancy from Plow."""
-    return call("GET", base, "/v1/lines", token=token)["data"]
+    return call("GET", base, "/v1/lines?include_mailboxes=false", token=token)["data"]
 
 
 def login(args: argparse.Namespace) -> None:

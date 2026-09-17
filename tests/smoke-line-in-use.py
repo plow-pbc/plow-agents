@@ -67,7 +67,7 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 -- BaseHTTPRequestHandler's name
         Stub.requests.append(f"GET {self.path}")
-        if self.path == "/v1/lines":
+        if self.path == "/v1/lines?include_mailboxes=false":
             other_account = self.headers.get("Authorization") == "Bearer acct_other"
             rows = []
             for stored in Stub.lines["data"]:
@@ -255,7 +255,7 @@ def main() -> int:
         Stub.requests.clear()
         listed = run("lines", cwd=work, base=base, token=token)
         check("lines exits 0", listed.returncode, 0)
-        check("lines reads availability from line occupancy", Stub.requests, ["GET /v1/lines"])
+        check("lines reads availability from line occupancy", Stub.requests, ["GET /v1/lines?include_mailboxes=false"])
         rows = {row.split("\t")[0]: row.split("\t")[3] for row in listed.stdout.splitlines()}
         check("chat-less free line is free", rows.get(FREE), "free")
         check("cloud line names its agent", rows.get(CLOUD), "agt_cloud")
@@ -273,7 +273,7 @@ def main() -> int:
         for held_line, caller_token in ((OTHER, token), (CLOUD, other_token)):
             Stub.requests.clear()
             refused = run("mint", held_line, cwd=work, base=base, token=caller_token)
-            check("another account's line is refused before create", refused.returncode != 0 and Stub.requests == ["GET /v1/lines"], True)
+            check("another account's line is refused before create", refused.returncode != 0 and Stub.requests == ["GET /v1/lines?include_mailboxes=false"], True)
             check("cross-account refusal creates no credential", os.path.exists(os.path.join(work, "plow-credentials")), False)
         Stub.include_available = False
         for caller_token, foreign_line, own_line, own_agent in (
@@ -312,7 +312,7 @@ def main() -> int:
         Stub.requests.clear()
         minted = run("mint", FREE, "--agent-api-base", "http://host.docker.internal:8000", cwd=work, base=base, token=token)
         check("mint on a chat-less free line succeeds", minted.returncode, 0)
-        check("chat-less mint checks lines then creates the agent", Stub.requests, ["GET /v1/lines", "POST /v1/agents"])
+        check("chat-less mint checks lines then creates the agent", Stub.requests, ["GET /v1/lines?include_mailboxes=false", "POST /v1/agents"])
         check("mint creates a self_hosted agent", Stub.minted[-1] if Stub.minted else None, {"name": "plow-agent", "provider": "self_hosted", "line_uid": FREE})
         if not os.path.isfile(credential):
             failures.append("mint did not create credential file")
@@ -466,9 +466,9 @@ def main() -> int:
                     dev_root = f"http://{host}:{server.server_address[1]}"
                     Stub.requests.clear()
                     with patch("socket.getaddrinfo", side_effect=lambda host, port, *args, **kwargs: resolve("127.0.0.1", port, *args, **kwargs)):
-                        cli_request("GET", dev_root + "/v1/lines", token="synthetic_account_token")
+                        cli_request("GET", dev_root + "/v1/lines?include_mailboxes=false", token="synthetic_account_token")
                         cli_request("POST", dev_root + "/v1/auth/activate/redeem", body={"activation_secret": "synthetic_activation_secret"})
-                    check(f"{host} sends both secrets directly to the origin", Stub.requests, ["GET /v1/lines", "POST /v1/auth/activate/redeem"])
+                    check(f"{host} sends both secrets directly to the origin", Stub.requests, ["GET /v1/lines?include_mailboxes=false", "POST /v1/auth/activate/redeem"])
                 check("configured proxy receives no request or secret", Proxy.received, [])
         finally:
             proxy.shutdown()
