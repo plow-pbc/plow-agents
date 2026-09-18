@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -179,7 +180,7 @@ class Smoke(unittest.TestCase):
         self.assertEqual(self.commands, [["docker", "push", "ghcr.io/example/agent:v1"]])
         self.assertEqual(json.loads(self.writes()[0].data), {"image": REF})
         self.assertEqual(json.loads(out)["image"], REF)
-        self.assertFalse(any("ghcr.io" in r.full_url for r in self.requests))
+        self.assertFalse(any(urllib.parse.urlsplit(r.full_url).hostname == "ghcr.io" for r in self.requests))
 
     def test_index_base_environment_and_local_http(self):
         with patch.dict(os.environ, {"PLOW_INDEX_BASE": "http://127.0.0.1:3847"}):
