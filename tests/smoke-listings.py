@@ -111,6 +111,20 @@ class Smoke(unittest.TestCase):
                 self.assertIn("Plow updated", err)
                 self.assertIn("Index updated", err)
 
+    def test_promote_mirrors_the_server_normalized_pin(self):
+        original = self.http
+
+        def normalize(req, *args, **kwargs):
+            response = original(req, *args, **kwargs)
+            if req.method == "PUT":
+                self.row["image"] = REF
+                return Response(self.row)
+            return response
+
+        with patch("urllib.request.OpenerDirector.open", side_effect=normalize):
+            self.run_cli("listing", "promote", "hermes", REF.replace("ghcr.io", "GHCR.IO"))
+        self.assertEqual(json.loads(self.writes()[1].data), {"image": REF})
+
     def test_plow_rejection_never_contacts_index(self):
         self.plow_status = 403
         _, err = self.run_cli("listing", "promote", "hermes", REF, success=False)
@@ -149,6 +163,19 @@ class Smoke(unittest.TestCase):
         _, err = self.run_cli("listing", "promote", "hermes", REF)
         self.assertIn("not on the Agent Index", err)
         self.assertEqual([r.method for r in self.writes()], ["PUT"])
+
+    def test_index_only_set_on_missing_listing_names_unapplied_flags(self):
+        self.index = None
+        _, err = self.run_cli(
+            "listing", "set", "hermes", "--name", "New", "--blurb", "Hello",
+            "--repo", "https://example.com/repo", "--video", '{"id":"demo"}',
+            "--link", "https://example.com/start", "--screenshot", "https://example.com/demo.png",
+            success=False,
+        )
+        for flag in ("--name", "--blurb", "--repo", "--video", "--link", "--screenshot"):
+            self.assertIn(flag, err)
+        self.assertIn("not applied", err)
+        self.assertFalse(self.writes())
 
     def test_set_routes_metadata_and_never_image(self):
         self.run_cli("listing", "set", "hermes", "--name", "New", "--blurb", "Hello", "--repo", "https://example.com/repo",

@@ -585,10 +585,10 @@ def index_listing(args: argparse.Namespace, row: dict) -> dict | None:
     return payload
 
 
-def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *, promoting: bool = False) -> None:
+def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *, promoting: bool = False) -> bool:
     log("Updating Listing (Agent Index)...")
     if index_listing(args, row) is None:
-        return
+        return False
     identity = call("GET", args.api_base, "/v1/auth/index-identity", token=token)
     path = "/v1/agents?" + urllib.parse.urlencode({"agent_id": row["index_id"]})
     status, payload = request("POST", args.index_base + path, token=identity["assertion"], body=body)
@@ -596,13 +596,14 @@ def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *,
         message = f"you do not own {row['slug']} on the Agent Index"
         if promoting:
             log(f"Index skipped: {message}; Plow updated")
-            return
+            return False
         die(message)
     if status // 100 != 2:
         die(f"Agent Index update answered {status}: {payload}")
     if payload.get("dropped"):
         die(f"Agent Index refused fields: {', '.join(payload['dropped'])}")
     log("Index updated")
+    return True
 
 
 def listing_show(args: argparse.Namespace) -> None:
@@ -621,7 +622,7 @@ def promote_listing(args: argparse.Namespace, slug: str, image: str | None) -> N
         die(f"Plow pin refused ({status}): {row}")
     log("Plow updated")
     print(json.dumps(row, indent=2))
-    update_index(args, row, {"image": image if image is not None else ""}, token, promoting=True)
+    update_index(args, row, {"image": row["image"] if row["image"] is not None else ""}, token, promoting=True)
 
 
 def listing_promote(args: argparse.Namespace) -> None:
@@ -632,9 +633,9 @@ def listing_set(args: argparse.Namespace) -> None:
     pin = {field: getattr(args, flag) for flag, field in
            (("phrase", "phrases"), ("owner", "owner_uid"), ("enabled", "enabled"))
            if getattr(args, flag) is not None}
-    site = {field: getattr(args, flag) for flag, field in
-            (("name", "name"), ("blurb", "blurb"), ("repo", "repo"), ("video", "video"),
-             ("link", "install_url"), ("screenshot", "images")) if getattr(args, flag) is not None}
+    site_fields = (("name", "name"), ("blurb", "blurb"), ("repo", "repo"), ("video", "video"),
+                   ("link", "install_url"), ("screenshot", "images"))
+    site = {field: getattr(args, flag) for flag, field in site_fields if getattr(args, flag) is not None}
     if not pin and not site:
         die("listing set needs at least one metadata flag; use listing promote to change the image")
     token = account_token(args)
@@ -651,7 +652,10 @@ def listing_set(args: argparse.Namespace) -> None:
         log("Plow created" if creating else "Plow updated")
     print(json.dumps(row, indent=2))
     if site:
-        update_index(args, row, site, token)
+        updated = update_index(args, row, site, token)
+        if not updated and not pin:
+            flags = " ".join("--" + flag for flag, field in site_fields if field in site)
+            die(f"{args.slug}: Index flags not applied: {flags}")
 
 
 def deploy(args: argparse.Namespace) -> None:
