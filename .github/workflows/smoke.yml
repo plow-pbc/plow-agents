@@ -12,3 +12,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 tests/smoke-line-in-use.py
       - run: python3 tests/smoke-deploy.py
+      - run: python3 tests/smoke-listings.py
