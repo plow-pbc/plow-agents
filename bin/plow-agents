@@ -36,6 +36,16 @@ CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
 CONFIG_FILE = "plow-agents.toml"
 DIGEST = r"sha256:[0-9a-f]{64}"
+# What a manifest HEAD will accept back. All four, because a tag may name an
+# index (multi-platform) or a single manifest, in either the OCI or the Docker
+# spelling, and a registry that cannot produce one of the types offered answers
+# 404 -- which reads exactly like a tag that does not exist.
+MANIFEST_TYPES = (
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+)
 # Plow caps a profile photo at 5 MB and takes these four formats. Restated
 # here only to refuse a file before any request is sent; the server decides.
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
@@ -471,6 +481,88 @@ def image_repository(image: str) -> str:
     return f"{host}/{name.rsplit(':', 1)[0]}"
 
 
+def image_tag(image: str) -> str | None:
+    """The tag in a registry/repository:tag, or None if it carries none.
+
+    Split after the host, never before it: a `registry:5000/agent` has a colon
+    that is a port, and reading that as a tag would send a HEAD for a manifest
+    named after the rest of the path.
+    """
+    _, _, path = image.partition("/")
+    repository, separator, tag = path.rpartition(":")
+    if not separator or not repository or "/" in tag or not tag:
+        return None
+    return tag
+
+
+def registry_head(url: str, bearer: str | None) -> tuple[int, object]:
+    """A manifest HEAD. Returns (status, headers); never raises on HTTP status.
+
+    Deliberately not `request`: nothing here is JSON, the answer wanted is a
+    header rather than a body, and -- the reason it is a separate function at
+    all -- this must never grow an Authorization from the account token. A
+    registry is not Plow, and the only bearer it is ever handed is the
+    anonymous one it just issued itself.
+    """
+    headers = {"Accept": ", ".join(MANIFEST_TYPES)}
+    if bearer is not None:
+        headers["Authorization"] = f"Bearer {bearer}"
+    req = urllib.request.Request(url, headers=headers, method="HEAD")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return response.status, response.headers
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers
+    except OSError as error:
+        die(f"cannot reach {url}: {error}")
+
+
+def registry_bearer(challenge: str) -> str | None:
+    """The anonymous half of the bearer flow, from a WWW-Authenticate header.
+
+    Public ECR and ghcr both answer an unauthenticated HEAD with a 401 naming a
+    token endpoint, and hand a pull token to anybody who asks -- so this is not
+    a login, it is the second half of an anonymous request. Nothing is sent
+    with it: no credential of ours belongs at a registry, and asking without
+    one is what makes the answer the same one Plow's own puller would get.
+    """
+    fields = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
+    realm = fields.get("realm", "")
+    if not realm.startswith("https://"):
+        return None
+    query = urllib.parse.urlencode(
+        [(name, fields[name]) for name in ("service", "scope") if fields.get(name)])
+    status, payload = request("GET", realm + (f"?{query}" if query else ""))
+    if status // 100 != 2 or not isinstance(payload, dict):
+        return None
+    bearer = payload.get("token") or payload.get("access_token")
+    return bearer if isinstance(bearer, str) and bearer else None
+
+
+def resolve_digest(repository: str, tag: str) -> str:
+    """repository:tag -> the digest the registry has under it, right now.
+
+    Resolved HERE rather than by Plow, so what is deployed is what this machine
+    looked at: a tag is a name its owner can move, and a digest sent to Plow is
+    the one thing that cannot be something else by the time the VM pulls it.
+    """
+    host, _, name = repository.partition("/")
+    url = f"https://{host}/v2/{name}/manifests/{urllib.parse.quote(tag, safe='')}"
+    status, headers = registry_head(url, None)
+    if status == 401:
+        bearer = registry_bearer(headers.get("WWW-Authenticate", ""))
+        if bearer is not None:
+            status, headers = registry_head(url, bearer)
+    if status // 100 != 2:
+        die(f"{repository}:{tag} did not resolve: the registry answered {status}")
+    digest = headers.get("Docker-Content-Digest") or ""
+    if not re.fullmatch(DIGEST, digest):
+        # A 200 with no digest header is a registry too old for this, not a
+        # missing tag -- say which, rather than reporting a tag that is there.
+        die(f"{repository}:{tag} resolved, but the registry sent no Docker-Content-Digest")
+    return digest
+
+
 def dockerignore_patterns(path: str) -> list[tuple[re.Pattern[str], bool]]:
     try:
         with open(path, encoding="utf-8-sig") as handle:
@@ -582,9 +674,21 @@ def deploy(args: argparse.Namespace) -> None:
             provider, name = target, target[4:]
         else:
             repository, separator, digest = target.partition("@")
-            if not separator or not re.fullmatch(DIGEST, digest):
-                die("deploy needs image@sha256:<64 hex>, exe:<slug>, or --local")
-            repository = project_image(repository)
+            if separator:
+                if not re.fullmatch(DIGEST, digest):
+                    die("deploy needs image@sha256:<64 hex>, image:tag, exe:<slug>, or --local")
+                repository = project_image(repository)
+            else:
+                # A tag is resolved to a digest before anything is sent, and it
+                # is the digest that is sent -- so `agents` shows what Plow will
+                # pull rather than a name, and a tag moved between this request
+                # and the pull cannot change what boots.
+                tag = image_tag(target) if target else None
+                if tag is None:
+                    die("deploy needs image@sha256:<64 hex>, image:tag, exe:<slug>, or --local")
+                repository = image_repository(project_image(target))
+                digest = resolve_digest(repository, tag)
+                log(f"resolved {repository}:{tag} -> {digest}")
             provider = f"exe:{repository}@{digest}"
             name = image_repository(repository).rsplit("/", 1)[-1]
     token = account_token(args)

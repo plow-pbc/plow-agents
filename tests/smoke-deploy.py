@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the CLI with fake Docker and HTTP; never touch a daemon or account."""
 import contextlib
+import email.message
 import io
 import json
 import os
@@ -16,12 +17,32 @@ CLI = Path(__file__).resolve().parents[1] / "bin/plow-agents"
 main = runpy.run_path(str(CLI))["main"]
 DIGEST = "sha256:" + "a" * 64
 IMAGE = "ghcr.io/example/agent"
+TAG_DIGEST = "sha256:" + "b" * 64
+MANIFEST_URL = "https://ghcr.io/v2/example/agent/manifests/v1"
+TOKEN_URL = "https://ghcr.io/token"
+CHALLENGE = 'Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:example/agent:pull"'
 
 
 class Response(io.BytesIO):
     def __init__(self, body, code=200):
         super().__init__(json.dumps(body).encode())
         self.status = code
+
+
+class Headers(io.BytesIO):
+    """A registry answer: the headers are the payload, the body is empty.
+
+    `email.message.Message` is what urllib itself puts on `.headers`, and it
+    looks names up case-insensitively -- which a plain dict does not, and which
+    is the whole reason `Docker-Content-Digest` can be read off a real answer.
+    """
+
+    def __init__(self, headers, code=200):
+        super().__init__(b"")
+        self.status = code
+        self.headers = email.message.Message()
+        for name, value in headers.items():
+            self.headers[name] = value
 
 
 class Smoke(unittest.TestCase):
@@ -41,6 +62,10 @@ class Smoke(unittest.TestCase):
         self.fail_up = False
         self.created = []
         self.deleted = []
+        self.registry = []
+        self.tag_status = 200
+        self.tag_digest = TAG_DIGEST
+        self.anonymous_token = "synthetic-registry"
         self.docker_patch = patch("subprocess.run", side_effect=self.docker)
         self.http_patch = patch("urllib.request.OpenerDirector.open", side_effect=self.http)
         self.docker_patch.start()
@@ -55,8 +80,10 @@ class Smoke(unittest.TestCase):
         return subprocess.CompletedProcess(argv, int(self.fail_up), f"v1: digest: {DIGEST} size: 123\n", stderr="compose startup failed: fixture error\n" if self.fail_up else "")
 
     def http(self, req, *args, **kwargs):
-        self.requests.append(req)
         url = req.full_url
+        if url.startswith(("https://ghcr.io/", "https://public.ecr.aws/")):
+            return self.registry_http(req)
+        self.requests.append(req)
         self.assertEqual(req.get_header("Authorization"), "Bearer synthetic-account")
         if url.endswith("/v1/lines"):
             # `provider_type` on every row, because the API sends it on every
@@ -77,6 +104,27 @@ class Smoke(unittest.TestCase):
         if url.endswith("/v1/agents"):
             return Response([{"line": {"uid": "ln_free"}, "provider": f"exe:{IMAGE}@{DIGEST}", "status": "failed", "failure_code": "image_pull_timeout"}])
         self.fail(f"unexpected request: {req.method} {url}")
+
+    def registry_http(self, req):
+        """The manifest HEAD and its token endpoint.
+
+        The account token must never arrive here, so that is asserted on every
+        registry request rather than in one test: a registry is not Plow, and
+        the bug this guards against is one nobody would see in the output.
+        """
+        self.registry.append((req.method, req.full_url, req.get_header("Authorization")))
+        self.assertNotIn("synthetic-account", req.get_header("Authorization") or "")
+        if req.full_url.startswith(TOKEN_URL):
+            return Response({"token": self.anonymous_token})
+        self.assertEqual(req.method, "HEAD")
+        accept = req.get_header("Accept")
+        for kind in ("oci.image.index.v1", "docker.distribution.manifest.list.v2"):
+            self.assertIn(kind, accept)
+        if req.get_header("Authorization") is None:
+            return Headers({"WWW-Authenticate": CHALLENGE}, 401)
+        if self.tag_status != 200:
+            return Headers({}, self.tag_status)
+        return Headers({"Docker-Content-Digest": self.tag_digest} if self.tag_digest else {})
 
     def run_cli(self, *args, success=True, expected_error=None):
         out, err = io.StringIO(), io.StringIO()
@@ -226,9 +274,69 @@ class Smoke(unittest.TestCase):
         self.created.clear()
         self.requests.clear()
         Path("plow-agents.toml").write_text(f'image = "{IMAGE}:v1"\nlast_pushed = "{IMAGE}@{DIGEST}"\n')
-        for target in ((), (DIGEST,), (IMAGE + ":v1",)):
-            self.run_cli("deploy", *target, "--line", "ln_free", success=False)
-            self.assertFalse(self.requests)
+        # A tag in the config is still not a target: `deploy` names what it
+        # deploys. A bare digest and a bare repository name neither.
+        for target in ((), (DIGEST,), (IMAGE,)):
+            with self.subTest(target=target):
+                self.run_cli("deploy", *target, "--line", "ln_free", success=False,
+                             expected_error="plow-agents: deploy needs image@sha256:<64 hex>, "
+                                            "image:tag, exe:<slug>, or --local")
+                self.assertFalse(self.requests)
+                self.assertFalse(self.registry)
+
+    def test_deploy_resolves_a_tag_to_a_digest(self):
+        out, err = self.run_cli("deploy", IMAGE + ":v1", "--line", "ln_explicit")
+        # What Plow is asked for is the digest, never the tag: a name its owner
+        # can move must not be what the VM pulls.
+        self.assertEqual(self.created[-1], {
+            "name": "agent", "line_uid": "ln_explicit", "provider": f"exe:{IMAGE}@{TAG_DIGEST}"})
+        self.assertIn(f"resolved {IMAGE}:v1 -> {TAG_DIGEST}", err)
+        self.assertEqual(out, "")
+        # Anonymous first, then once more with the token that 401 named -- and
+        # the second HEAD is the one that carries it.
+        self.assertEqual([(method, url) for method, url, _ in self.registry], [
+            ("HEAD", MANIFEST_URL),
+            ("GET", TOKEN_URL + "?service=ghcr.io&scope=repository%3Aexample%2Fagent%3Apull"),
+            ("HEAD", MANIFEST_URL),
+        ])
+        self.assertEqual([auth for _, _, auth in self.registry],
+                         [None, None, "Bearer synthetic-registry"])
+
+    def test_deploy_passes_a_digest_through_untouched(self):
+        self.run_cli("deploy", f"{IMAGE}@{DIGEST}", "--line", "ln_explicit")
+        self.assertEqual(self.created[-1]["provider"], f"exe:{IMAGE}@{DIGEST}")
+        # No registry was asked anything: a digest is already the answer.
+        self.assertFalse(self.registry)
+
+    def test_a_tag_that_does_not_resolve_deploys_nothing(self):
+        for status, said in ((404, "the registry answered 404"), (500, "the registry answered 500")):
+            with self.subTest(status=status):
+                self.tag_status = status
+                self.created.clear()
+                self.run_cli("deploy", IMAGE + ":v1", "--line", "ln_explicit", success=False,
+                             expected_error=f"plow-agents: {IMAGE}:v1 did not resolve: {said}")
+                self.assertFalse(self.created)
+        # A 200 carrying no digest is a registry too old for this, not a
+        # missing tag, and says so rather than reporting the tag absent.
+        self.tag_status, self.tag_digest = 200, ""
+        self.created.clear()
+        self.run_cli("deploy", IMAGE + ":v1", "--line", "ln_explicit", success=False,
+                     expected_error=f"plow-agents: {IMAGE}:v1 resolved, but the registry sent "
+                                    "no Docker-Content-Digest")
+        self.assertFalse(self.created)
+
+    def test_a_registry_port_is_not_a_tag(self):
+        """`registry:5000/agent` has a colon that is a port, not a tag."""
+        cli = runpy.run_path(str(CLI))
+        for image, tag in (
+            ("registry.example:5000/agent", None),
+            ("registry.example:5000/agent:v1", "v1"),
+            ("ghcr.io/example/agent", None),
+            ("ghcr.io/example/agent:v1", "v1"),
+            ("ghcr.io/example/agent:1.2.3-rc.1", "1.2.3-rc.1"),
+        ):
+            with self.subTest(image=image):
+                self.assertEqual(cli["image_tag"](image), tag)
 
     def test_local_requires_credential_exclusion_before_mint(self):
         for rules in (None, "plow-*\n!plow-credentials\n"):

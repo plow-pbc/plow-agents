@@ -73,6 +73,12 @@ plow-agents deploy ghcr.io/YOUR_ACCOUNT/my-agent@sha256:… --line ln_xxx
 plow-agents agents
 ```
 
+A tag works too — `plow-agents deploy ghcr.io/YOUR_ACCOUNT/my-agent:v1 --line
+ln_xxx` asks the registry what `v1` points at right now, prints
+`resolved … -> sha256:…`, and sends the digest. What Plow stores and pulls is
+always the digest, so a tag moved after this resolves cannot change what the
+VM pulls.
+
 You can also deploy a listing with `plow-agents deploy exe:hermes --line ln_xxx`.
 
 ## 6. Text it
@@ -135,7 +141,7 @@ plow-agents profile --show
 | `plow-agents revoke [LINE] [--credential-file PATH]` | Retire any agent on LINE, or the credential-file self-hosted agent. |
 | `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
 | `plow-agents image push [IMAGE]` | Push and print the full image reference. |
-| `plow-agents deploy TARGET --line LINE` | Request an image@sha256:… or an `exe:slug` listing. |
+| `plow-agents deploy TARGET --line LINE` | Request an image@sha256:…, an image:tag (resolved to a digest here, then sent), or an `exe:slug` listing. |
 | `plow-agents deploy --local --line LINE [--agent-api-base URL]` | Mint a credential and start Compose locally. |
 | `plow-agents agents` | Show tab-separated line, target, and status. |
 
