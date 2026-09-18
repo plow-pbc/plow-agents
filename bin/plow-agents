@@ -7,6 +7,10 @@
     plow-agents profile          set or show this account's public profile (--photo takes a file)
     plow-agents rotate           replace this self-hosted agent's credential
     plow-agents revoke [line]    retire the credential-file agent, or any agent by line
+    plow-agents listing show SLUG       Pin (what Plow boots) and Listing (Agent Index)
+    plow-agents listing set SLUG ...    edit metadata; never the image pin
+    plow-agents listing promote SLUG REF | --none   pin or clear, mirrored to the Index
+    plow-agents image push [IMAGE] --promote SLUG   push and promote that exact digest
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
 rotate, revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
@@ -32,6 +36,7 @@ import urllib.request
 from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
+DEFAULT_INDEX_BASE = "https://tkmx.odio.dev"
 CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
 CONFIG_FILE = "plow-agents.toml"
@@ -558,7 +563,100 @@ def image_push(args: argparse.Namespace) -> None:
     found = re.findall(r"digest: (" + DIGEST + r")\b", docker("push", image))
     if not found:
         die("docker push printed no sha256 digest")
-    print(f"{image_repository(image)}@{found[-1]}")
+    ref = f"{image_repository(image)}@{found[-1]}"
+    if args.promote:
+        promote_listing(args, args.promote, ref)
+    else:
+        print(ref)
+
+
+def listing_path(slug: str) -> str:
+    return "/v1/listings/" + urllib.parse.quote(slug.removeprefix("exe:"), safe="")
+
+
+def index_listing(args: argparse.Namespace, row: dict) -> dict | None:
+    path = "/v1/agent?" + urllib.parse.urlencode({"agent_id": row["index_id"]})
+    status, payload = request("GET", args.index_base + path)
+    if status == 404:
+        log(f"{row['slug']}: not on the Agent Index")
+        return None
+    if status // 100 != 2:
+        die(f"Agent Index read answered {status}: {payload}")
+    return payload
+
+
+def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *, promoting: bool = False) -> bool:
+    log("Updating Listing (Agent Index)...")
+    if index_listing(args, row) is None:
+        return False
+    identity = call("GET", args.api_base, "/v1/auth/index-identity", token=token)
+    path = "/v1/agents?" + urllib.parse.urlencode({"agent_id": row["index_id"]})
+    status, payload = request("POST", args.index_base + path, token=identity["assertion"], body=body)
+    if status == 409:
+        message = f"you do not own {row['slug']} on the Agent Index"
+        if promoting:
+            log(f"Index skipped: {message}; Plow updated")
+            return False
+        die(message)
+    if status // 100 != 2:
+        die(f"Agent Index update answered {status}: {payload}")
+    if payload.get("dropped"):
+        die(f"Agent Index refused fields: {', '.join(payload['dropped'])}")
+    log("Index updated")
+    return True
+
+
+def listing_show(args: argparse.Namespace) -> None:
+    row = call("GET", args.api_base, listing_path(args.slug))
+    site = index_listing(args, row)
+    print(json.dumps({"Pin (what Plow boots)": row, "Listing (Agent Index)": site}, indent=2))
+
+
+def promote_listing(args: argparse.Namespace, slug: str, image: str | None) -> None:
+    token = account_token(args)
+    path = listing_path(slug)
+    status, row = request("PUT", args.api_base + path, token=token, body={"image": image})
+    if status == 403:
+        die(f"you do not own {slug} (an allowlisted Plow admin may also promote)")
+    if status // 100 != 2:
+        die(f"Plow pin refused ({status}): {row}")
+    log("Plow updated")
+    print(json.dumps(row, indent=2))
+    update_index(args, row, {"image": row["image"] if row["image"] is not None else ""}, token, promoting=True)
+
+
+def listing_promote(args: argparse.Namespace) -> None:
+    promote_listing(args, args.slug, args.ref)
+
+
+def listing_set(args: argparse.Namespace) -> None:
+    pin = {field: getattr(args, flag) for flag, field in
+           (("phrase", "phrases"), ("owner", "owner_uid"), ("enabled", "enabled"))
+           if getattr(args, flag) is not None}
+    site_fields = (("name", "name"), ("blurb", "blurb"), ("repo", "repo"), ("video", "video"),
+                   ("link", "install_url"), ("screenshot", "images"))
+    site = {field: getattr(args, flag) for flag, field in site_fields if getattr(args, flag) is not None}
+    if not pin and not site:
+        die("listing set needs at least one metadata flag; use listing promote to change the image")
+    token = account_token(args)
+    path = listing_path(args.slug)
+    status, row = request("GET", args.api_base + path)
+    creating = status == 404
+    if not creating and status // 100 != 2:
+        die(f"Plow listing read answered {status}: {row}")
+    if creating and args.name is not None:
+        # A new Plow row needs its initial display name; later name edits belong to the Index.
+        pin["name"] = args.name
+    if pin or creating:
+        row = call("PUT", args.api_base, path, token=token, body=pin)
+        log("Plow created" if creating else "Plow updated")
+    print(json.dumps(row, indent=2))
+    if site:
+        updated = update_index(args, row, site, token)
+        if not updated:
+            flags = " ".join("--" + flag for flag, field in site_fields if field in site)
+            outcome = ("Plow created" if creating else "Plow updated") + "; " if pin or creating else f"{args.slug}: "
+            die(f"{outcome}Index flags not applied: {flags}")
 
 
 def deploy(args: argparse.Namespace) -> None:
@@ -621,6 +719,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="plow-agents", description=__doc__.splitlines()[0])
     parser.add_argument("--api-base", default=DEFAULT_API_BASE, help=f"Plow API root, without /v1 (default {DEFAULT_API_BASE})")
     parser.add_argument("--token-file", default=None, help="account token (default ~/.config/plow/token)")
+    parser.add_argument("--index-base", default=os.environ.get("PLOW_INDEX_BASE", DEFAULT_INDEX_BASE),
+                        help=f"Agent Index root (env PLOW_INDEX_BASE; default {DEFAULT_INDEX_BASE})")
     verbs = parser.add_subparsers(dest="verb", required=True)
 
     it = verbs.add_parser("login", help="text a code, store this account's token")
@@ -654,7 +754,38 @@ def main() -> int:
     for verb, run in (("build", image_build), ("push", image_push)):
         image = images.add_parser(verb, help=f"{verb} an image")
         image.add_argument("image", nargs="?", metavar="IMAGE", help="registry/repository:tag")
+        if verb == "push":
+            image.add_argument("--promote", metavar="SLUG", help="promote this push's digest to a listing and mirror it to the Index")
         image.set_defaults(run=run)
+
+    it = verbs.add_parser("listing", help="show a listing, edit metadata, or promote an image")
+    listings = it.add_subparsers(dest="listing_verb", required=True)
+    show = listings.add_parser("show", help="Pin (what Plow boots) and Listing (Agent Index); no token needed")
+    show.add_argument("slug")
+    show.set_defaults(run=listing_show)
+    promote = listings.add_parser("promote", help="promote or clear the image pin",
+                                  description="Set the Plow image pin, mirrored to the listing on the Agent Index. An older digest rolls back.")
+    promote.add_argument("slug")
+    target = promote.add_mutually_exclusive_group(required=True)
+    target.add_argument("ref", nargs="?", metavar="REF", help="registry/repository@sha256:<64 hex>")
+    target.add_argument("--none", action="store_true", help="clear both pins and prevent new provisions")
+    promote.set_defaults(run=listing_promote)
+    edit = listings.add_parser("set", help="edit metadata; use promote for the image",
+                               description="Set only the metadata flags supplied. The image pin is never changed.")
+    edit.add_argument("slug")
+    pin = edit.add_argument_group("Pin (what Plow boots)", "Plow admin only. Creating a row also requires --name and --phrase.")
+    pin.add_argument("--phrase", action="append", help="signup phrase; repeat to replace the phrase list")
+    pin.add_argument("--owner", help="Plow owner UID")
+    enabled = pin.add_mutually_exclusive_group()
+    enabled.add_argument("--enabled", dest="enabled", action="store_true", default=None)
+    enabled.add_argument("--disabled", dest="enabled", action="store_false")
+    site = edit.add_argument_group("Listing (Agent Index)", "Index owner only. --name also initializes a new Plow row.")
+    for flag in ("name", "blurb", "repo"):
+        site.add_argument("--" + flag)
+    site.add_argument("--video", type=json.loads, metavar="JSON", help='video object: {"provider":"youtube","id":"...","title":"..."}')
+    site.add_argument("--link", help="installation/tutorial HTTPS URL; empty string clears")
+    site.add_argument("--screenshot", action="append", metavar="URL", help="repeat to replace the screenshot list")
+    edit.set_defaults(run=listing_set)
 
     it = verbs.add_parser("deploy", help="request an agent on a line")
     it.add_argument("target", nargs="?", help="image@sha256:... or exe:<slug>")
@@ -666,12 +797,17 @@ def main() -> int:
 
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
-    args.api_base = strip_v1(args.api_base)
-    endpoint = urllib.parse.urlsplit(args.api_base)
-    host = endpoint.hostname or ""
-    local = host in ("localhost", "127.0.0.1", "::1") or host.endswith(".orb.local")
-    if not host or not (endpoint.scheme == "https" or endpoint.scheme == "http" and local):
-        die("--api-base requires HTTPS except for localhost, 127.0.0.1, ::1, or *.orb.local")
+    bases = ["api_base"]
+    if args.verb == "listing" or (args.verb == "image" and args.image_verb == "push" and args.promote):
+        bases.append("index_base")
+    for option in bases:
+        base = strip_v1(getattr(args, option))
+        endpoint = urllib.parse.urlsplit(base)
+        host = endpoint.hostname or ""
+        local = host in ("localhost", "127.0.0.1", "::1") or host.endswith(".orb.local")
+        if not host or not (endpoint.scheme == "https" or endpoint.scheme == "http" and local):
+            die(f"--{option.replace('_', '-')} requires HTTPS except for localhost, 127.0.0.1, ::1, or *.orb.local")
+        setattr(args, option, base)
     # `--api-base` is where *this tool* calls; the credential says where the
     # *container* calls. The same address usually, but not against a local
     # stack: a 127.0.0.1 that works out here is the container's own loopback.
