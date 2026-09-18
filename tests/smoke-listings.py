@@ -177,6 +177,16 @@ class Smoke(unittest.TestCase):
         self.assertIn("not applied", err)
         self.assertFalse(self.writes())
 
+    def test_mixed_set_on_missing_index_reports_partial_failure(self):
+        self.index = None
+        out, err = self.run_cli(
+            "listing", "set", "hermes", "--phrase", "New phrase", "--blurb", "Hello",
+            success=False,
+        )
+        self.assertEqual(json.loads(out)["phrases"], ["New phrase"])
+        self.assertEqual([r.method for r in self.writes()], ["PUT"])
+        self.assertIn("Plow updated; Index flags not applied: --blurb", err)
+
     def test_set_routes_metadata_and_never_image(self):
         self.run_cli("listing", "set", "hermes", "--name", "New", "--blurb", "Hello", "--repo", "https://example.com/repo",
                      "--video", '{"provider":"youtube","id":"demo"}', "--link", "https://example.com/start",
@@ -196,7 +206,8 @@ class Smoke(unittest.TestCase):
 
     def test_admin_create(self):
         self.row, self.index = None, None
-        out, err = self.run_cli("listing", "set", "new", "--name", "New", "--phrase", "Hello", "--owner", "owner-uid")
+        out, err = self.run_cli("listing", "set", "new", "--name", "New", "--phrase", "Hello", "--owner", "owner-uid", success=False)
+        self.assertIn("Plow created; Index flags not applied: --name", err)
         self.assertEqual(json.loads(self.writes()[0].data), {"name": "New", "phrases": ["Hello"], "owner_uid": "owner-uid"})
         self.assertIn("created", err)
         self.assertEqual(json.loads(out)["slug"], "new")

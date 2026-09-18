@@ -143,8 +143,8 @@ plow-agents listing set my-agent --link https://example.com/start --screenshot h
 plow-agents listing set my-agent --video '{"provider":"youtube","id":"VIDEO_ID","title":"Demo"}'
 ```
 
-These flags update the Index only. If the Index has no listing, an Index-only `set` names the
-unapplied flags and exits nonzero; `promote` still succeeds with an explicit skip. `--link` is its installation/tutorial URL; repeat `--screenshot`
+These flags update the Index only. If the Index has no listing, `set` names the unapplied flags and exits nonzero,
+even when its Plow fields were saved; `promote` still succeeds with an explicit skip. `--link` is its installation/tutorial URL; repeat `--screenshot`
 to replace the screenshot list. Only supplied flags are sent. Index writes exchange your account
 bearer for an Index-only assertion; your account token never goes to the Index.
 

@@ -653,9 +653,10 @@ def listing_set(args: argparse.Namespace) -> None:
     print(json.dumps(row, indent=2))
     if site:
         updated = update_index(args, row, site, token)
-        if not updated and not pin:
+        if not updated:
             flags = " ".join("--" + flag for flag, field in site_fields if field in site)
-            die(f"{args.slug}: Index flags not applied: {flags}")
+            outcome = ("Plow created" if creating else "Plow updated") + "; " if pin or creating else f"{args.slug}: "
+            die(f"{outcome}Index flags not applied: {flags}")
 
 
 def deploy(args: argparse.Namespace) -> None:
