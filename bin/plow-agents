@@ -7,9 +7,9 @@
     plow-agents profile          set or show this account's public profile (--photo takes a file)
     plow-agents rotate           replace this self-hosted agent's credential
     plow-agents revoke [line]    retire the credential-file agent, or any agent by line
-    plow-agents listing show SLUG       Pin (what Plow boots) and Listing (Agent Index)
-    plow-agents listing set SLUG ...    edit metadata; never the image pin
-    plow-agents listing promote SLUG REF | --none   pin or clear, mirrored to the Index
+    plow-agents image show SLUG       Pin (what Plow boots) and Listing (Agent Index)
+    plow-agents image set SLUG ...    edit metadata; never the image pin
+    plow-agents image promote SLUG REF | --none   pin or clear, mirrored to the Index
     plow-agents image push [IMAGE] --promote SLUG   push and promote that exact digest
 
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
@@ -565,13 +565,13 @@ def image_push(args: argparse.Namespace) -> None:
         die("docker push printed no sha256 digest")
     ref = f"{image_repository(image)}@{found[-1]}"
     if args.promote:
-        promote_listing(args, args.promote, ref)
+        promote_image(args, args.promote, ref)
     else:
         print(ref)
 
 
-def listing_path(slug: str) -> str:
-    return "/v1/listings/" + urllib.parse.quote(slug.removeprefix("exe:"), safe="")
+def agent_image_path(slug: str) -> str:
+    return "/v1/agent-images/" + urllib.parse.quote(slug.removeprefix("exe:"), safe="")
 
 
 def index_listing(args: argparse.Namespace, row: dict) -> dict | None:
@@ -606,15 +606,15 @@ def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *,
     return True
 
 
-def listing_show(args: argparse.Namespace) -> None:
-    row = call("GET", args.api_base, listing_path(args.slug))
+def image_show(args: argparse.Namespace) -> None:
+    row = call("GET", args.api_base, agent_image_path(args.slug))
     site = index_listing(args, row)
     print(json.dumps({"Pin (what Plow boots)": row, "Listing (Agent Index)": site}, indent=2))
 
 
-def promote_listing(args: argparse.Namespace, slug: str, image: str | None) -> None:
+def promote_image(args: argparse.Namespace, slug: str, image: str | None) -> None:
     token = account_token(args)
-    path = listing_path(slug)
+    path = agent_image_path(slug)
     status, row = request("PUT", args.api_base + path, token=token, body={"image": image})
     if status == 403:
         die(f"you do not own {slug} (an allowlisted Plow admin may also promote)")
@@ -625,11 +625,11 @@ def promote_listing(args: argparse.Namespace, slug: str, image: str | None) -> N
     update_index(args, row, {"image": row["image"] if row["image"] is not None else ""}, token, promoting=True)
 
 
-def listing_promote(args: argparse.Namespace) -> None:
-    promote_listing(args, args.slug, args.ref)
+def image_promote(args: argparse.Namespace) -> None:
+    promote_image(args, args.slug, args.ref)
 
 
-def listing_set(args: argparse.Namespace) -> None:
+def image_set(args: argparse.Namespace) -> None:
     pin = {field: getattr(args, flag) for flag, field in
            (("phrase", "phrases"), ("owner", "owner_uid"), ("enabled", "enabled"))
            if getattr(args, flag) is not None}
@@ -637,13 +637,13 @@ def listing_set(args: argparse.Namespace) -> None:
                    ("link", "install_url"), ("screenshot", "images"))
     site = {field: getattr(args, flag) for flag, field in site_fields if getattr(args, flag) is not None}
     if not pin and not site:
-        die("listing set needs at least one metadata flag; use listing promote to change the image")
+        die("image set needs at least one metadata flag; use image promote to change the image")
     token = account_token(args)
-    path = listing_path(args.slug)
+    path = agent_image_path(args.slug)
     status, row = request("GET", args.api_base + path)
     creating = status == 404
     if not creating and status // 100 != 2:
-        die(f"Plow listing read answered {status}: {row}")
+        die(f"Plow agent image read answered {status}: {row}")
     if creating and args.name is not None:
         # A new Plow row needs its initial display name; later name edits belong to the Index.
         pin["name"] = args.name
@@ -749,28 +749,26 @@ def main() -> int:
     it.add_argument("--credential-file", default=CREDENTIAL_FILE, help=f"the credential to revoke (default ./{CREDENTIAL_FILE})")
     it.set_defaults(run=revoke)
 
-    it = verbs.add_parser("image", help="build or push this project's image")
+    it = verbs.add_parser("image", help="build, push, inspect, edit, or promote an agent image")
     images = it.add_subparsers(dest="image_verb", required=True)
     for verb, run in (("build", image_build), ("push", image_push)):
         image = images.add_parser(verb, help=f"{verb} an image")
         image.add_argument("image", nargs="?", metavar="IMAGE", help="registry/repository:tag")
         if verb == "push":
-            image.add_argument("--promote", metavar="SLUG", help="promote this push's digest to a listing and mirror it to the Index")
+            image.add_argument("--promote", metavar="SLUG", help="promote this push's digest to an agent image and mirror it to the Index")
         image.set_defaults(run=run)
 
-    it = verbs.add_parser("listing", help="show a listing, edit metadata, or promote an image")
-    listings = it.add_subparsers(dest="listing_verb", required=True)
-    show = listings.add_parser("show", help="Pin (what Plow boots) and Listing (Agent Index); no token needed")
+    show = images.add_parser("show", help="Pin (what Plow boots) and Listing (Agent Index); no token needed")
     show.add_argument("slug")
-    show.set_defaults(run=listing_show)
-    promote = listings.add_parser("promote", help="promote or clear the image pin",
+    show.set_defaults(run=image_show)
+    promote = images.add_parser("promote", help="promote or clear the image pin",
                                   description="Set the Plow image pin, mirrored to the listing on the Agent Index. An older digest rolls back.")
     promote.add_argument("slug")
     target = promote.add_mutually_exclusive_group(required=True)
     target.add_argument("ref", nargs="?", metavar="REF", help="registry/repository@sha256:<64 hex>")
     target.add_argument("--none", action="store_true", help="clear both pins and prevent new provisions")
-    promote.set_defaults(run=listing_promote)
-    edit = listings.add_parser("set", help="edit metadata; use promote for the image",
+    promote.set_defaults(run=image_promote)
+    edit = images.add_parser("set", help="edit metadata; use promote for the image",
                                description="Set only the metadata flags supplied. The image pin is never changed.")
     edit.add_argument("slug")
     pin = edit.add_argument_group("Pin (what Plow boots)", "Plow admin only. Creating a row also requires --name and --phrase.")
@@ -785,7 +783,7 @@ def main() -> int:
     site.add_argument("--video", type=json.loads, metavar="JSON", help='video object: {"provider":"youtube","id":"...","title":"..."}')
     site.add_argument("--link", help="installation/tutorial HTTPS URL; empty string clears")
     site.add_argument("--screenshot", action="append", metavar="URL", help="repeat to replace the screenshot list")
-    edit.set_defaults(run=listing_set)
+    edit.set_defaults(run=image_set)
 
     it = verbs.add_parser("deploy", help="request an agent on a line")
     it.add_argument("target", nargs="?", help="image@sha256:... or exe:<slug>")
@@ -798,7 +796,7 @@ def main() -> int:
     args = parser.parse_args()
     # The agent builds `${PLOW_API_BASE}/v1`, so a /v1 here would 404 every call.
     bases = ["api_base"]
-    if args.verb == "listing" or (args.verb == "image" and args.image_verb == "push" and args.promote):
+    if args.verb == "image" and (args.image_verb in {"show", "set", "promote"} or (args.image_verb == "push" and args.promote)):
         bases.append("index_base")
     for option in bases:
         base = strip_v1(getattr(args, option))

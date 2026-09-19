@@ -73,7 +73,7 @@ plow-agents deploy ghcr.io/YOUR_ACCOUNT/my-agent@sha256:… --line ln_xxx
 plow-agents agents
 ```
 
-You can also deploy a listing with `plow-agents deploy exe:hermes --line ln_xxx`.
+You can also deploy an agent image with `plow-agents deploy exe:hermes --line ln_xxx`.
 
 ## 6. Text it
 
@@ -100,19 +100,19 @@ plow-agents revoke
 docker compose down -v
 ```
 
-## Publish updates to a listing
+## Publish updates to an agent image
 
-Once a Plow admin assigns your account as the listing's owner, inspect both stores:
+Once a Plow admin assigns your account as the agent image's owner, inspect both stores:
 
 ```sh
-plow-agents listing show my-agent
+plow-agents image show my-agent
 ```
 
 This public read needs no token. Its JSON has two labelled halves: **Pin (what Plow boots)**
 contains the current Plow digest, enabled state and signup phrases; **Listing (Agent Index)**
 contains the site's name, blurb, repository, media, installs and image. Different images stay
 visible side by side. Hermes uses its API-provided Index id, `plow-base-hermes`.
-A listing absent from the Index is normal: its half is null and stderr says "not on the Agent Index".
+An agent image absent from the Index is normal: its half is null and stderr says "not on the Agent Index".
 
 Build and push as above, then promote the exact digest from that push in one command:
 
@@ -125,8 +125,8 @@ Promotion affects new agents; it does not replace images on running agents. To p
 you already have, roll back to an older digest, or stop new provisions:
 
 ```sh
-plow-agents listing promote my-agent ghcr.io/YOUR_ACCOUNT/my-agent@sha256:<64-hex-digest>
-plow-agents listing promote my-agent --none
+plow-agents image promote my-agent ghcr.io/YOUR_ACCOUNT/my-agent@sha256:<64-hex-digest>
+plow-agents image promote my-agent --none
 ```
 
 Plow is updated first, then the image is mirrored to the Index. Clearing sends null to Plow and
@@ -138,9 +138,9 @@ still succeeds and the Index is explicitly skipped (exit zero). The CLI does not
 Edit site metadata separately; `set` never changes an image:
 
 ```sh
-plow-agents listing set my-agent --name "My agent" --blurb "What it does" --repo https://github.com/YOUR_ACCOUNT/my-agent
-plow-agents listing set my-agent --link https://example.com/start --screenshot https://example.com/demo.png
-plow-agents listing set my-agent --video '{"provider":"youtube","id":"VIDEO_ID","title":"Demo"}'
+plow-agents image set my-agent --name "My agent" --blurb "What it does" --repo https://github.com/YOUR_ACCOUNT/my-agent
+plow-agents image set my-agent --link https://example.com/start --screenshot https://example.com/demo.png
+plow-agents image set my-agent --video '{"provider":"youtube","id":"VIDEO_ID","title":"Demo"}'
 ```
 
 These flags update the Index only. If the Index has no listing, `set` names the unapplied flags and exits nonzero,
@@ -151,8 +151,8 @@ bearer for an Index-only assertion; your account token never goes to the Index.
 Plow admins manage signup phrases and ownership with:
 
 ```sh
-plow-agents listing set my-agent --phrase "Set this up for me: My agent" --owner OWNER_UID --enabled
-plow-agents listing set new-agent --name "New agent" --phrase "Set this up for me: New agent" --owner OWNER_UID
+plow-agents image set my-agent --phrase "Set this up for me: My agent" --owner OWNER_UID --enabled
+plow-agents image set new-agent --name "New agent" --phrase "Set this up for me: New agent" --owner OWNER_UID
 ```
 
 Repeat `--phrase` to replace the phrase list. `--disabled` stops new provisions. Plow-only flags
@@ -160,13 +160,13 @@ never contact the Index. Creating a Plow row also sends its initial `--name` to 
 "created"; later name edits go only to the Index. Non-admins cannot create Plow rows.
 
 Write commands print the public Plow row as JSON to stdout and progress/outcomes to stderr.
-Use `listing show` to read the combined state after site metadata edits. Plain `image push` still
+Use `image show` to read the combined state after site metadata edits. Plain `image push` still
 prints a digest reference; with `--promote` it prints the promotion's JSON row.
 
 To target local services (put global flags before the command):
 
 ```sh
-plow-agents --api-base http://127.0.0.1:19034 --index-base http://127.0.0.1:3847 --token-file /tmp/dev-token listing show my-agent
+plow-agents --api-base http://127.0.0.1:19034 --index-base http://127.0.0.1:3847 --token-file /tmp/dev-token image show my-agent
 ```
 
 `--index-base` overrides `PLOW_INDEX_BASE`; otherwise the production Index is
@@ -206,12 +206,12 @@ plow-agents profile --show
 | `plow-agents rotate [--credential-file PATH]` | Replace the credential; recreate the container to load it. |
 | `plow-agents revoke [LINE] [--credential-file PATH]` | Retire any agent on LINE, or the credential-file self-hosted agent. |
 | `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
-| `plow-agents image push [IMAGE] [--promote SLUG]` | Push and print the digest, or promote that exact digest to a listing. |
-| `plow-agents listing show SLUG` | Public combined view of the Plow pin and Agent Index listing. |
-| `plow-agents listing promote SLUG REF \| --none` | Set or clear the pin, then mirror it to the Index. |
-| `plow-agents listing set SLUG [--name --blurb --repo --video --link --screenshot]` | Edit Index metadata; never the image. |
-| `plow-agents listing set SLUG [--phrase --owner --enabled/--disabled]` | Admin-only Plow metadata; repeat --phrase for multiple phrases. |
-| `plow-agents deploy TARGET --line LINE` | Request an image@sha256:… or an `exe:slug` listing. |
+| `plow-agents image push [IMAGE] [--promote SLUG]` | Push and print the digest, or promote that exact digest to an agent image. |
+| `plow-agents image show SLUG` | Public combined view of the Plow pin and Agent Index listing. |
+| `plow-agents image promote SLUG REF \| --none` | Set or clear the pin, then mirror it to the Index. |
+| `plow-agents image set SLUG [--name --blurb --repo --video --link --screenshot]` | Edit Index metadata; never the image. |
+| `plow-agents image set SLUG [--phrase --owner --enabled/--disabled]` | Admin-only Plow metadata; repeat --phrase for multiple phrases. |
+| `plow-agents deploy TARGET --line LINE` | Request an image@sha256:… or an `exe:slug` agent image. |
 | `plow-agents deploy --local --line LINE [--agent-api-base URL]` | Mint a credential and start Compose locally. |
 | `plow-agents agents` | Show tab-separated line, target, and status. |
 

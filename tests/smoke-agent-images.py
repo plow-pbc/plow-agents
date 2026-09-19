@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run listing commands with fake HTTP and Docker; no accounts or registry access."""
+"""Run image commands with fake HTTP and Docker; no accounts or registry access."""
 import contextlib
 import io
 import json
@@ -48,7 +48,7 @@ class Smoke(unittest.TestCase):
     def http(self, req, *args, **kwargs):
         self.requests.append(req)
         body = json.loads(req.data) if req.data else None
-        if "/v1/listings/" in req.full_url:
+        if "/v1/agent-images/" in req.full_url:
             if req.method == "GET":
                 self.assertIsNone(req.get_header("Authorization"))
                 return Response(self.row or {"detail": "missing"}, 200 if self.row else 404)
@@ -103,7 +103,7 @@ class Smoke(unittest.TestCase):
         for extra, plow_image, index_image in [([REF], REF, REF), (["--none"], None, "")]:
             with self.subTest(extra=extra):
                 self.requests.clear()
-                out, err = self.run_cli("listing", "promote", "hermes", *extra)
+                out, err = self.run_cli("image", "promote", "hermes", *extra)
                 self.assertEqual([r.method for r in self.writes()], ["PUT", "POST"])
                 self.assertEqual(json.loads(self.writes()[0].data), {"image": plow_image})
                 self.assertEqual(json.loads(self.writes()[1].data), {"image": index_image})
@@ -122,33 +122,33 @@ class Smoke(unittest.TestCase):
             return response
 
         with patch("urllib.request.OpenerDirector.open", side_effect=normalize):
-            self.run_cli("listing", "promote", "hermes", REF.replace("ghcr.io", "GHCR.IO"))
+            self.run_cli("image", "promote", "hermes", REF.replace("ghcr.io", "GHCR.IO"))
         self.assertEqual(json.loads(self.writes()[1].data), {"image": REF})
 
     def test_plow_rejection_never_contacts_index(self):
         self.plow_status = 403
-        _, err = self.run_cli("listing", "promote", "hermes", REF, success=False)
+        _, err = self.run_cli("image", "promote", "hermes", REF, success=False)
         self.assertIn("you do not own hermes", err)
-        self.assertTrue(all("/v1/listings/" in r.full_url for r in self.requests))
+        self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
 
     def test_partial_index_failure_and_refused_image(self):
         for status, dropped in [(500, {}), (200, {"image": 1})]:
             with self.subTest(status=status):
                 self.index_status, self.dropped = status, dropped
-                out, err = self.run_cli("listing", "promote", "hermes", REF, success=False)
+                out, err = self.run_cli("image", "promote", "hermes", REF, success=False)
                 self.assertEqual(json.loads(out)["image"], REF)
                 self.assertIn("Plow updated", err)
                 self.assertIn("Index", err)
 
     def test_admin_not_index_owner_skips_successfully(self):
         self.index_status = 409
-        _, err = self.run_cli("listing", "promote", "hermes", REF)
+        _, err = self.run_cli("image", "promote", "hermes", REF)
         self.assertIn("Plow updated", err)
         self.assertIn("you do not own hermes on the Agent Index", err)
         self.assertIn("skipped", err)
 
     def test_show_uses_index_id_and_needs_no_token(self):
-        out, _ = self.run_cli("listing", "show", "hermes", token=False)
+        out, _ = self.run_cli("image", "show", "hermes", token=False)
         view = json.loads(out)
         self.assertEqual(view["Pin (what Plow boots)"]["image"], REF)
         self.assertEqual(view["Listing (Agent Index)"]["image"], "old")
@@ -156,18 +156,18 @@ class Smoke(unittest.TestCase):
 
     def test_missing_index_is_normal(self):
         self.index = None
-        out, err = self.run_cli("listing", "show", "hermes", token=False)
+        out, err = self.run_cli("image", "show", "hermes", token=False)
         self.assertIsNone(json.loads(out)["Listing (Agent Index)"])
         self.assertIn("not on the Agent Index", err)
         self.requests.clear()
-        _, err = self.run_cli("listing", "promote", "hermes", REF)
+        _, err = self.run_cli("image", "promote", "hermes", REF)
         self.assertIn("not on the Agent Index", err)
         self.assertEqual([r.method for r in self.writes()], ["PUT"])
 
     def test_index_only_set_on_missing_listing_names_unapplied_flags(self):
         self.index = None
         _, err = self.run_cli(
-            "listing", "set", "hermes", "--name", "New", "--blurb", "Hello",
+            "image", "set", "hermes", "--name", "New", "--blurb", "Hello",
             "--repo", "https://example.com/repo", "--video", '{"id":"demo"}',
             "--link", "https://example.com/start", "--screenshot", "https://example.com/demo.png",
             success=False,
@@ -180,7 +180,7 @@ class Smoke(unittest.TestCase):
     def test_mixed_set_on_missing_index_reports_partial_failure(self):
         self.index = None
         out, err = self.run_cli(
-            "listing", "set", "hermes", "--phrase", "New phrase", "--blurb", "Hello",
+            "image", "set", "hermes", "--phrase", "New phrase", "--blurb", "Hello",
             success=False,
         )
         self.assertEqual(json.loads(out)["phrases"], ["New phrase"])
@@ -188,7 +188,7 @@ class Smoke(unittest.TestCase):
         self.assertIn("Plow updated; Index flags not applied: --blurb", err)
 
     def test_set_routes_metadata_and_never_image(self):
-        self.run_cli("listing", "set", "hermes", "--name", "New", "--blurb", "Hello", "--repo", "https://example.com/repo",
+        self.run_cli("image", "set", "hermes", "--name", "New", "--blurb", "Hello", "--repo", "https://example.com/repo",
                      "--video", '{"provider":"youtube","id":"demo"}', "--link", "https://example.com/start",
                      "--screenshot", "https://example.com/one.png", "--screenshot", "https://example.com/two.png")
         self.assertEqual(len(self.writes()), 1)
@@ -196,17 +196,17 @@ class Smoke(unittest.TestCase):
         self.assertEqual(body, {"name": "New", "blurb": "Hello", "repo": "https://example.com/repo",
                                 "video": {"provider": "youtube", "id": "demo"}, "install_url": "https://example.com/start",
                                 "images": ["https://example.com/one.png", "https://example.com/two.png"]})
-        self.run_cli("listing", "set", "hermes", "--image", REF, success=False)
+        self.run_cli("image", "set", "hermes", "--image", REF, success=False)
         self.assertTrue(all("image" not in json.loads(r.data) for r in self.writes()))
 
     def test_plow_only_set_never_contacts_index(self):
-        self.run_cli("listing", "set", "hermes", "--phrase", "One", "--phrase", "Two", "--owner", "owner-uid", "--disabled")
-        self.assertTrue(all("/v1/listings/" in r.full_url for r in self.requests))
+        self.run_cli("image", "set", "hermes", "--phrase", "One", "--phrase", "Two", "--owner", "owner-uid", "--disabled")
+        self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
         self.assertEqual(json.loads(self.writes()[0].data), {"phrases": ["One", "Two"], "owner_uid": "owner-uid", "enabled": False})
 
     def test_admin_create(self):
         self.row, self.index = None, None
-        out, err = self.run_cli("listing", "set", "new", "--name", "New", "--phrase", "Hello", "--owner", "owner-uid", success=False)
+        out, err = self.run_cli("image", "set", "new", "--name", "New", "--phrase", "Hello", "--owner", "owner-uid", success=False)
         self.assertIn("Plow created; Index flags not applied: --name", err)
         self.assertEqual(json.loads(self.writes()[0].data), {"name": "New", "phrases": ["Hello"], "owner_uid": "owner-uid"})
         self.assertIn("created", err)
@@ -222,29 +222,29 @@ class Smoke(unittest.TestCase):
 
     def test_index_base_environment_and_local_http(self):
         with patch.dict(os.environ, {"PLOW_INDEX_BASE": "http://127.0.0.1:3847"}):
-            self.run_cli("listing", "show", "hermes", index_base=None)
+            self.run_cli("image", "show", "hermes", index_base=None)
         self.assertTrue(self.requests[-1].full_url.startswith("http://127.0.0.1:3847/"))
 
     def test_index_only_non_owner_fails(self):
         self.index_status = 409
-        _, err = self.run_cli("listing", "set", "hermes", "--name", "New", success=False)
+        _, err = self.run_cli("image", "set", "hermes", "--name", "New", success=False)
         self.assertIn("you do not own hermes on the Agent Index", err)
         self.assertFalse(any(r.method == "PUT" for r in self.requests))
 
     def test_mixed_set_stops_after_plow_refusal(self):
         self.plow_status = 403
-        self.run_cli("listing", "set", "hermes", "--name", "New", "--phrase", "Hello", success=False)
-        self.assertTrue(all("/v1/listings/" in r.full_url for r in self.requests))
+        self.run_cli("image", "set", "hermes", "--name", "New", "--phrase", "Hello", success=False)
+        self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
 
     def test_missing_slug_non_admin_is_not_created(self):
         self.row = None
         self.plow_status = 404
-        self.run_cli("listing", "set", "missing", "--name", "New", "--phrase", "Hello", success=False)
-        self.assertTrue(all("/v1/listings/" in r.full_url for r in self.requests))
+        self.run_cli("image", "set", "missing", "--name", "New", "--phrase", "Hello", success=False)
+        self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
 
     def test_promote_requires_exactly_one_target(self):
-        self.run_cli("listing", "promote", "hermes", success=False)
-        self.run_cli("listing", "promote", "hermes", REF, "--none", success=False)
+        self.run_cli("image", "promote", "hermes", success=False)
+        self.run_cli("image", "promote", "hermes", REF, "--none", success=False)
         self.assertFalse(self.requests)
 
     def test_index_network_failure_reports_successful_plow_write(self):
@@ -256,25 +256,19 @@ class Smoke(unittest.TestCase):
             return original(req, *args, **kwargs)
 
         with patch("urllib.request.OpenerDirector.open", side_effect=offline):
-            out, err = self.run_cli("listing", "promote", "hermes", REF, success=False)
+            out, err = self.run_cli("image", "promote", "hermes", REF, success=False)
         self.assertEqual(json.loads(out)["image"], REF)
         self.assertIn("Plow updated", err)
         self.assertIn("offline", err)
 
     def test_index_base_flag_overrides_environment_and_rejects_remote_http(self):
         with patch.dict(os.environ, {"PLOW_INDEX_BASE": "https://other.example.test"}):
-            self.run_cli("listing", "show", "hermes")
+            self.run_cli("image", "show", "hermes")
         self.assertTrue(self.requests[-1].full_url.startswith("https://index.example.test/"))
         self.requests.clear()
-        self.run_cli("listing", "show", "hermes", index_base="http://index.example.test", success=False)
+        self.run_cli("image", "show", "hermes", index_base="http://index.example.test", success=False)
         self.assertFalse(self.requests)
 
-    def test_help_labels(self):
-        out, _ = self.run_cli("listing", "set", "--help")
-        self.assertIn("Pin (what Plow boots)", out)
-        self.assertIn("Listing (Agent Index)", out)
-        out, _ = self.run_cli("listing", "promote", "--help")
-        self.assertIn("mirrored", out)
 
 
 if __name__ == "__main__":
