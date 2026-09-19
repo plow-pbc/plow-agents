@@ -8,8 +8,8 @@
     plow-agents rotate           replace this self-hosted agent's credential
     plow-agents revoke [line]    retire the credential-file agent, or any agent by line
     plow-agents image show SLUG       Pin (what Plow boots) and Listing (Agent Index)
-    plow-agents image set SLUG ...    edit metadata; never the image pin
-    plow-agents image promote SLUG REF | --none   pin or clear, mirrored to the Index
+    plow-agents image set SLUG ...    claim or edit the Index listing; never admit to Plow
+    plow-agents image promote SLUG REF | --none [--owner UID]   admit or update the pin, mirrored to the Index
     plow-agents image push [IMAGE] --promote SLUG   push and promote that exact digest
 
 Image commands use the same slug for the Plow catalog and the Agent Index.
@@ -334,7 +334,9 @@ def profile(args: argparse.Namespace) -> None:
     if args.show:
         if args.name is not None or args.photo is not None:
             die("profile --show cannot be combined with --name or --photo")
-        print(json.dumps(call("GET", args.api_base, "/v1/auth/profile", token=token), sort_keys=True))
+        result = call("GET", args.api_base, "/v1/auth/profile", token=token)
+        result["uid"] = call("GET", args.api_base, "/v1/auth/owner-uid", token=token)["owner_uid"]
+        print(json.dumps(result, sort_keys=True))
         return
     if args.name is None and args.photo is None:
         die("profile needs --name, --photo, or --show")
@@ -587,10 +589,10 @@ def index_listing(args: argparse.Namespace, row: dict) -> dict | None:
     return payload
 
 
-def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *, promoting: bool = False) -> bool:
+def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *, promoting: bool = False) -> None:
     log("Updating Listing (Agent Index)...")
-    if index_listing(args, row) is None:
-        return False
+    if promoting and index_listing(args, row) is None:
+        return
     identity = call("GET", args.api_base, "/v1/auth/index-identity", token=token)
     path = "/v1/agents?" + urllib.parse.urlencode({"agent_id": row["slug"]})
     status, payload = request("POST", args.index_base + path, token=identity["assertion"], body=body)
@@ -598,14 +600,13 @@ def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *,
         message = f"you do not own {row['slug']} on the Agent Index"
         if promoting:
             log(f"Index skipped: {message}; Plow updated")
-            return False
+            return
         die(message)
     if status // 100 != 2:
         die(f"Agent Index update answered {status}: {payload}")
     if payload.get("dropped"):
         die(f"Agent Index refused fields: {', '.join(payload['dropped'])}")
     log("Index updated")
-    return True
 
 
 def image_show(args: argparse.Namespace) -> None:
@@ -614,21 +615,38 @@ def image_show(args: argparse.Namespace) -> None:
     print(json.dumps({"Pin (what Plow boots)": row, "Listing (Agent Index)": site}, indent=2))
 
 
-def promote_image(args: argparse.Namespace, slug: str, image: str | None) -> None:
+def promote_image(args: argparse.Namespace, slug: str, image: str | None, *, owner: str | None = None) -> None:
     token = account_token(args)
     path = agent_image_path(slug)
-    status, row = request("PUT", args.api_base + path, token=token, body={"image": image})
+    status, row = request("GET", args.api_base + path)
+    creating = status == 404
+    if not creating and status // 100 != 2:
+        die(f"Plow agent image read answered {status}: {row}")
+    body = {"image": image}
+    if creating:
+        if owner is None:
+            die("creating a Plow row requires --owner <plow user uid>; nothing was sent")
+        slug = slug.removeprefix("exe:")
+        listing = index_listing(args, {"slug": slug})
+        if listing is None:
+            die("register it on the leaderboard first (image set)")
+        body.update(name=listing["name"], phrases=[f"Set this up for me: aiworthusing.com/agent-index/{slug}"], owner_uid=owner)
+    elif owner is not None:
+        log("--owner ignored: this image is already admitted to Plow")
+    status, row = request("PUT", args.api_base + path, token=token, body=body)
+    if status == 404:
+        die("not admitted to Plow yet; ask an admin")
     if status == 403:
         die(f"you do not own {slug} (an allowlisted Plow admin may also promote)")
     if status // 100 != 2:
         die(f"Plow pin refused ({status}): {row}")
-    log("Plow updated")
+    log("Plow admitted" if creating else "Plow updated")
     print(json.dumps(row, indent=2))
     update_index(args, row, {"image": row["image"] if row["image"] is not None else ""}, token, promoting=True)
 
 
 def image_promote(args: argparse.Namespace) -> None:
-    promote_image(args, args.slug, args.ref)
+    promote_image(args, args.slug, args.ref, owner=args.owner)
 
 
 def image_set(args: argparse.Namespace) -> None:
@@ -646,19 +664,14 @@ def image_set(args: argparse.Namespace) -> None:
     creating = status == 404
     if not creating and status // 100 != 2:
         die(f"Plow agent image read answered {status}: {row}")
-    if creating and args.name is not None:
-        # A new Plow row needs its initial display name; later name edits belong to the Index.
-        pin["name"] = args.name
-    if pin or creating:
+    if creating and pin:
+        die("not admitted to Plow yet; an admin promotes it first")
+    if pin:
         row = call("PUT", args.api_base, path, token=token, body=pin)
-        log("Plow created" if creating else "Plow updated")
-    print(json.dumps(row, indent=2))
+        log("Plow updated")
+    print(json.dumps(None if creating else row, indent=2))
     if site:
-        updated = update_index(args, row, site, token)
-        if not updated:
-            flags = " ".join("--" + flag for flag, field in site_fields if field in site)
-            outcome = ("Plow created" if creating else "Plow updated") + "; " if pin or creating else f"{args.slug}: "
-            die(f"{outcome}Index flags not applied: {flags}")
+        update_index(args, {"slug": args.slug.removeprefix("exe:")}, site, token)
 
 
 def deploy(args: argparse.Namespace) -> None:
@@ -766,6 +779,7 @@ def main() -> int:
     promote = images.add_parser("promote", help="promote or clear the image pin",
                                   description="Set the Plow image pin, mirrored to the listing on the Agent Index. An older digest rolls back.")
     promote.add_argument("slug")
+    promote.add_argument("--owner", metavar="UID", help="Plow user UID; required for an admin to admit a new image")
     target = promote.add_mutually_exclusive_group(required=True)
     target.add_argument("ref", nargs="?", metavar="REF", help="registry/repository@sha256:<64 hex>")
     target.add_argument("--none", action="store_true", help="clear both pins and prevent new provisions")
@@ -773,13 +787,13 @@ def main() -> int:
     edit = images.add_parser("set", help="edit metadata; use promote for the image",
                                description="Set only the metadata flags supplied. The image pin is never changed.")
     edit.add_argument("slug")
-    pin = edit.add_argument_group("Pin (what Plow boots)", "Plow admin only. Creating a row also requires --name and --phrase.")
+    pin = edit.add_argument_group("Pin (what Plow boots)", "Plow admin only; the image must already be admitted.")
     pin.add_argument("--phrase", action="append", help="signup phrase; repeat to replace the phrase list")
     pin.add_argument("--owner", help="Plow owner UID")
     enabled = pin.add_mutually_exclusive_group()
     enabled.add_argument("--enabled", dest="enabled", action="store_true", default=None)
     enabled.add_argument("--disabled", dest="enabled", action="store_false")
-    site = edit.add_argument_group("Listing (Agent Index)", "Index owner only. --name also initializes a new Plow row.")
+    site = edit.add_argument_group("Listing (Agent Index)", "Claim an unregistered slug or update a listing you own.")
     for flag in ("name", "blurb", "repo"):
         site.add_argument("--" + flag)
     site.add_argument("--video", type=json.loads, metavar="JSON", help='video object: {"provider":"youtube","id":"...","title":"..."}')

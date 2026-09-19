@@ -100,68 +100,68 @@ plow-agents revoke
 docker compose down -v
 ```
 
-## Publish updates to an agent image
+## Register, admit, then promote an agent image
 
-Once a Plow admin assigns your account as the agent image's owner, inspect both stores:
+1. Register your listing on the Agent Index. `image set` claims an unregistered slug or updates a listing you own:
+
+   ```sh
+   plow-agents image set my-agent --name "My agent" --blurb "What it does" --repo https://github.com/YOUR_ACCOUNT/my-agent
+   plow-agents profile --show
+   ```
+
+   `profile --show` includes your account `uid`; give that UID to the Plow admin. Registration does not create a Plow catalog row.
+
+2. Build and push a public image as above. A Plow admin admits it, explicitly assigning the builder's UID:
+
+   ```sh
+   plow-agents image promote my-agent ghcr.io/YOUR_ACCOUNT/my-agent@sha256:<64-hex-digest> --owner OWNER_UID
+   ```
+
+   Admission requires an existing Index listing. The initial Plow name comes from that listing, and its signup phrase is `Set this up for me: aiworthusing.com/agent-index/my-agent`. The CLI prints "admitted". It first reads the public Plow row; if the row is missing and `--owner` is absent, it refuses before any write. Non-admins cannot admit an image.
+
+3. Once admitted, the owner promotes future digests without an admin:
+
+   ```sh
+   plow-agents image push ghcr.io/YOUR_ACCOUNT/my-agent:v2 --promote my-agent
+   plow-agents image promote my-agent ghcr.io/YOUR_ACCOUNT/my-agent@sha256:<64-hex-digest>
+   ```
+
+   `--owner` is ignored with a note when the Plow row already exists; promotion does not change ownership. The image must be publicly pullable. Plow checks its manifest before accepting the pin. Promotion affects new agents; running agents keep their images.
+
+Inspect an admitted image with:
 
 ```sh
 plow-agents image show my-agent
 ```
 
-This public read needs no token. Its JSON has two labelled halves: **Pin (what Plow boots)**
-contains the current Plow digest, enabled state and signup phrases; **Listing (Agent Index)**
-contains the site's name, blurb, repository, media, installs and image. Different images stay
-visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
-An agent image absent from the Index is normal: its half is null and stderr says "not on the Agent Index".
+This public read needs no token. Its JSON has two labelled halves: **Pin (what Plow boots)** contains the current Plow digest, enabled state and signup phrases; **Listing (Agent Index)** contains the site's name, blurb, repository, media, installs and image. Different images stay visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
 
-Build and push as above, then promote the exact digest from that push in one command:
+To roll back, promote an older digest. To stop new provisions:
 
 ```sh
-plow-agents image push ghcr.io/YOUR_ACCOUNT/my-agent:v2 --promote my-agent
-```
-
-The image must be publicly pullable. Plow validates the manifest before accepting the pin.
-Promotion affects new agents; it does not replace images on running agents. To promote a digest
-you already have, roll back to an older digest, or stop new provisions:
-
-```sh
-plow-agents image promote my-agent ghcr.io/YOUR_ACCOUNT/my-agent@sha256:<64-hex-digest>
 plow-agents image promote my-agent --none
 ```
 
-Plow is updated first, then the image is mirrored to the Index. Clearing sends null to Plow and
-an empty image to the Index. If Plow rejects, the Index is untouched. If the Index fails or drops
-the image, stderr reports both outcomes and the command exits nonzero; rerun the same promotion
-to retry. If the Index has no listing, or you are a Plow admin but not its Index owner, the pin
-still succeeds and the Index is explicitly skipped (exit zero). The CLI does not create Index listings.
+Plow is written first, then the image is mirrored to the Index. Clearing sends null to Plow and an empty image to the Index. If Plow rejects, the Index is not written. If the Index fails or drops the image, stderr reports both outcomes and the command exits nonzero; rerun the same promotion to retry. For an already-admitted image, a missing Index listing or an admin who is not its Index owner causes an explicit skip after the Plow update.
 
-Edit site metadata separately; `set` never changes an image:
+Edit site metadata with `set`; it never changes an image pin:
 
 ```sh
-plow-agents image set my-agent --name "My agent" --blurb "What it does" --repo https://github.com/YOUR_ACCOUNT/my-agent
 plow-agents image set my-agent --link https://example.com/start --screenshot https://example.com/demo.png
 plow-agents image set my-agent --video '{"provider":"youtube","id":"VIDEO_ID","title":"Demo"}'
 ```
 
-These flags update the Index only. If the Index has no listing, `set` names the unapplied flags and exits nonzero,
-even when its Plow fields were saved; `promote` still succeeds with an explicit skip. `--link` is its installation/tutorial URL; repeat `--screenshot`
-to replace the screenshot list. Only supplied flags are sent. Index writes exchange your account
-bearer for an Index-only assertion; your account token never goes to the Index.
+Site flags write only to the Index, claiming the slug when it is unregistered. Only supplied flags are sent. `--link` is the installation/tutorial URL; repeat `--screenshot` to replace the screenshot list. Index writes exchange the account bearer for an Index-only assertion; the account token never goes to the Index.
 
-Plow admins manage signup phrases and ownership with:
+Plow admins manage already-admitted images with:
 
 ```sh
 plow-agents image set my-agent --phrase "Set this up for me: My agent" --owner OWNER_UID --enabled
-plow-agents image set new-agent --name "New agent" --phrase "Set this up for me: New agent" --owner OWNER_UID
 ```
 
-Repeat `--phrase` to replace the phrase list. `--disabled` stops new provisions. Plow-only flags
-never contact the Index. Creating a Plow row also sends its initial `--name` to Plow and prints
-"created"; later name edits go only to the Index. Non-admins cannot create Plow rows.
+Repeat `--phrase` to replace signup phrases. `--disabled` stops new provisions. Plow-only flags never contact the Index. If the Plow row is missing, these flags refuse: an admin must admit it with `image promote ... --owner` first. `set` never creates a Plow row.
 
-Write commands print the public Plow row as JSON to stdout and progress/outcomes to stderr.
-Use `image show` to read the combined state after site metadata edits. Plain `image push` still
-prints a digest reference; with `--promote` it prints the promotion's JSON row.
+Write commands print the public Plow row as JSON to stdout (`null` for an Index-only registration before admission) and progress/outcomes to stderr. Plain `image push` prints a digest reference; with `--promote` it prints the promotion's JSON row. Use `image promote ... --owner` for first admission; `image push --promote` updates an already-admitted image.
 
 To target local services (put global flags before the command):
 
@@ -208,8 +208,8 @@ plow-agents profile --show
 | `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
 | `plow-agents image push [IMAGE] [--promote SLUG]` | Push and print the digest, or promote that exact digest to an agent image. |
 | `plow-agents image show SLUG` | Public combined view of the Plow pin and Agent Index listing. |
-| `plow-agents image promote SLUG REF \| --none` | Set or clear the pin, then mirror it to the Index. |
-| `plow-agents image set SLUG [--name --blurb --repo --video --link --screenshot]` | Edit Index metadata; never the image. |
+| `plow-agents image promote SLUG REF \| --none [--owner UID]` | Admit with an explicit owner, or update an existing pin; mirror to the Index. |
+| `plow-agents image set SLUG [--name --blurb --repo --video --link --screenshot]` | Claim or edit Index metadata; never create a Plow row. |
 | `plow-agents image set SLUG [--phrase --owner --enabled/--disabled]` | Admin-only Plow metadata; repeat --phrase for multiple phrases. |
 | `plow-agents deploy TARGET --line LINE` | Request an image@sha256:… or an `exe:slug` agent image. |
 | `plow-agents deploy --local --line LINE [--agent-api-base URL]` | Mint a credential and start Compose locally. |

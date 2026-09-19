@@ -56,7 +56,7 @@ class Smoke(unittest.TestCase):
             if self.plow_status != 200:
                 return Response({"detail": "permission denied"}, self.plow_status)
             if self.row is None:
-                self.row = {"slug": "new", "image": None}
+                self.row = {"slug": urllib.parse.unquote(req.full_url.rsplit("/", 1)[1]), "image": None}
             self.row.update(body)
             return Response(self.row)
         if req.full_url.endswith("/v1/auth/index-identity"):
@@ -66,11 +66,14 @@ class Smoke(unittest.TestCase):
             self.assertIsNone(req.get_header("Authorization"))
             return Response(self.index or {"error": "no such agent"}, 200 if self.index else 404)
         if "/v1/agents?" in req.full_url:
-            self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query), {"agent_id": [self.row["slug"]]})
+            slug = urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query)["agent_id"][0]
+            self.assertEqual(slug, self.row["slug"] if self.row else "hermes")
             self.assertEqual(req.get_header("Authorization"), "Bearer synthetic-index-assertion")
             if self.index_status != 200:
                 return Response({"error": "index refused"}, self.index_status)
             if not self.dropped:
+                if self.index is None:
+                    self.index = {"agent_id": slug}
                 self.index.update(body)
             return Response({"ok": True, "result": "updated", "dropped": self.dropped})
         self.fail(f"unexpected request: {req.method} {req.full_url}")
@@ -165,28 +168,20 @@ class Smoke(unittest.TestCase):
         self.assertIn("not on the Agent Index", err)
         self.assertEqual([r.method for r in self.writes()], ["PUT"])
 
-    def test_index_only_set_on_missing_listing_names_unapplied_flags(self):
-        self.index = None
-        _, err = self.run_cli(
-            "image", "set", "hermes", "--name", "New", "--blurb", "Hello",
-            "--repo", "https://example.com/repo", "--video", '{"id":"demo"}',
-            "--link", "https://example.com/start", "--screenshot", "https://example.com/demo.png",
-            success=False,
-        )
-        for flag in ("--name", "--blurb", "--repo", "--video", "--link", "--screenshot"):
-            self.assertIn(flag, err)
-        self.assertIn("not applied", err)
-        self.assertFalse(self.writes())
+    def test_set_claims_index_without_admitting_to_plow(self):
+        self.row, self.index = None, None
+        self.run_cli("image", "set", "hermes", "--name", "Hermes", "--blurb", "Hello")
+        self.assertEqual([r.method for r in self.writes()], ["POST"])
+        self.assertEqual(self.index["agent_id"], "hermes")
+        self.assertEqual(self.index["name"], "Hermes")
+        self.assertIsNone(self.row)
 
-    def test_mixed_set_on_missing_index_reports_partial_failure(self):
+    def test_mixed_set_claims_missing_index(self):
         self.index = None
-        out, err = self.run_cli(
-            "image", "set", "hermes", "--phrase", "New phrase", "--blurb", "Hello",
-            success=False,
-        )
+        out, _ = self.run_cli("image", "set", "hermes", "--phrase", "New phrase", "--name", "Hermes")
         self.assertEqual(json.loads(out)["phrases"], ["New phrase"])
-        self.assertEqual([r.method for r in self.writes()], ["PUT"])
-        self.assertIn("Plow updated; Index flags not applied: --blurb", err)
+        self.assertEqual([r.method for r in self.writes()], ["PUT", "POST"])
+        self.assertEqual(self.index["name"], "Hermes")
 
     def test_set_routes_metadata_and_never_image(self):
         self.run_cli("image", "set", "hermes", "--name", "New", "--blurb", "Hello", "--repo", "https://example.com/repo",
@@ -205,14 +200,45 @@ class Smoke(unittest.TestCase):
         self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
         self.assertEqual(json.loads(self.writes()[0].data), {"phrases": ["One", "Two"], "owner_uid": "owner-uid", "enabled": False})
 
-    def test_admin_create(self):
+    def test_set_never_creates_plow_row(self):
+        self.row = None
+        _, err = self.run_cli("image", "set", "hermes", "--name", "Hermes", "--phrase", "Hello", "--owner", "owner-uid", success=False)
+        self.assertIn("not admitted to Plow yet; an admin promotes it first", err)
+        self.assertFalse(self.writes())
+
+    def test_promote_admits_with_explicit_owner(self):
+        self.row = None
+        out, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "owner-uid")
+        self.assertEqual(json.loads(self.writes()[0].data), {
+            "image": REF, "name": "Site name",
+            "phrases": ["Set this up for me: aiworthusing.com/agent-index/hermes"], "owner_uid": "owner-uid",
+        })
+        self.assertEqual(json.loads(out)["slug"], "hermes")
+        self.assertIn("admitted", err)
+
+    def test_promote_admission_without_owner_does_not_write(self):
+        self.row = None
+        _, err = self.run_cli("image", "promote", "hermes", REF, success=False)
+        self.assertIn("creating a Plow row requires --owner <plow user uid>; nothing was sent", err)
+        self.assertEqual([r.method for r in self.requests], ["GET"])
+        self.assertFalse(self.writes())
+
+    def test_promote_admission_requires_index_listing(self):
         self.row, self.index = None, None
-        out, err = self.run_cli("image", "set", "new", "--name", "New", "--phrase", "Hello", "--owner", "owner-uid", success=False)
-        self.assertIn("Plow created; Index flags not applied: --name", err)
-        self.assertEqual(json.loads(self.writes()[0].data), {"name": "New", "phrases": ["Hello"], "owner_uid": "owner-uid"})
-        self.assertIn("created", err)
-        self.assertEqual(json.loads(out)["slug"], "new")
-        self.assertEqual(len(self.writes()), 1)
+        _, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "owner-uid", success=False)
+        self.assertIn("register it on the leaderboard first (image set)", err)
+        self.assertFalse(self.writes())
+
+    def test_promote_admission_non_admin_is_explained(self):
+        self.row, self.plow_status = None, 404
+        _, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "owner-uid", success=False)
+        self.assertIn("not admitted to Plow yet; ask an admin", err)
+        self.assertEqual([r.method for r in self.writes()], ["PUT"])
+
+    def test_existing_promote_ignores_owner(self):
+        _, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "ignored-uid")
+        self.assertEqual(json.loads(self.writes()[0].data), {"image": REF})
+        self.assertIn("--owner ignored", err)
 
     def test_push_promotes_digest_from_this_push(self):
         out, _ = self.run_cli("image", "push", "ghcr.io/example/agent:v1", "--promote", "hermes")
