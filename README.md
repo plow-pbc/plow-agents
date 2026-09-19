@@ -111,7 +111,7 @@ plow-agents image show my-agent
 This public read needs no token. Its JSON has two labelled halves: **Pin (what Plow boots)**
 contains the current Plow digest, enabled state and signup phrases; **Listing (Agent Index)**
 contains the site's name, blurb, repository, media, installs and image. Different images stay
-visible side by side. Hermes uses its API-provided Index id, `plow-base-hermes`.
+visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
 An agent image absent from the Index is normal: its half is null and stderr says "not on the Agent Index".
 
 Build and push as above, then promote the exact digest from that push in one command:

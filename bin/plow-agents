@@ -12,6 +12,8 @@
     plow-agents image promote SLUG REF | --none   pin or clear, mirrored to the Index
     plow-agents image push [IMAGE] --promote SLUG   push and promote that exact digest
 
+Image commands use the same slug for the Plow catalog and the Agent Index.
+
 `login` stores an ACCOUNT token in ~/.config/plow/token; it can list lines, mint,
 rotate, revoke, and read or set the public profile, so it does travel -- over HTTPS, to Plow. What it never does is enter a
 container. `mint` uses it for an AGENT credential scoped to one line, and that
@@ -575,7 +577,7 @@ def agent_image_path(slug: str) -> str:
 
 
 def index_listing(args: argparse.Namespace, row: dict) -> dict | None:
-    path = "/v1/agent?" + urllib.parse.urlencode({"agent_id": row["index_id"]})
+    path = "/v1/agent?" + urllib.parse.urlencode({"agent_id": row["slug"]})
     status, payload = request("GET", args.index_base + path)
     if status == 404:
         log(f"{row['slug']}: not on the Agent Index")
@@ -590,7 +592,7 @@ def update_index(args: argparse.Namespace, row: dict, body: dict, token: str, *,
     if index_listing(args, row) is None:
         return False
     identity = call("GET", args.api_base, "/v1/auth/index-identity", token=token)
-    path = "/v1/agents?" + urllib.parse.urlencode({"agent_id": row["index_id"]})
+    path = "/v1/agents?" + urllib.parse.urlencode({"agent_id": row["slug"]})
     status, payload = request("POST", args.index_base + path, token=identity["assertion"], body=body)
     if status == 409:
         message = f"you do not own {row['slug']} on the Agent Index"

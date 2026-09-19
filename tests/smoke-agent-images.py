@@ -30,9 +30,9 @@ class Smoke(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.token = Path(self.directory.name) / "token"
         self.token.write_text("synthetic-account")
-        self.row = {"slug": "hermes", "index_id": "plow-base-hermes", "name": "Hermes",
+        self.row = {"slug": "hermes", "name": "Hermes",
                     "image": REF, "enabled": True, "phrases": ["Hello"], "updated_at": "2026-09-18T00:00:00Z"}
-        self.index = {"agent_id": "plow-base-hermes", "name": "Site name", "image": "old", "installs": {"total": 7}}
+        self.index = {"agent_id": "hermes", "name": "Site name", "image": "old", "installs": {"total": 7}}
         self.requests = []
         self.commands = []
         self.plow_status = 200
@@ -56,7 +56,7 @@ class Smoke(unittest.TestCase):
             if self.plow_status != 200:
                 return Response({"detail": "permission denied"}, self.plow_status)
             if self.row is None:
-                self.row = {"slug": "new", "index_id": "new", "image": None}
+                self.row = {"slug": "new", "image": None}
             self.row.update(body)
             return Response(self.row)
         if req.full_url.endswith("/v1/auth/index-identity"):
@@ -66,6 +66,7 @@ class Smoke(unittest.TestCase):
             self.assertIsNone(req.get_header("Authorization"))
             return Response(self.index or {"error": "no such agent"}, 200 if self.index else 404)
         if "/v1/agents?" in req.full_url:
+            self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query), {"agent_id": [self.row["slug"]]})
             self.assertEqual(req.get_header("Authorization"), "Bearer synthetic-index-assertion")
             if self.index_status != 200:
                 return Response({"error": "index refused"}, self.index_status)
@@ -147,12 +148,12 @@ class Smoke(unittest.TestCase):
         self.assertIn("you do not own hermes on the Agent Index", err)
         self.assertIn("skipped", err)
 
-    def test_show_uses_index_id_and_needs_no_token(self):
+    def test_show_uses_slug_and_needs_no_token(self):
         out, _ = self.run_cli("image", "show", "hermes", token=False)
         view = json.loads(out)
         self.assertEqual(view["Pin (what Plow boots)"]["image"], REF)
         self.assertEqual(view["Listing (Agent Index)"]["image"], "old")
-        self.assertEqual(self.requests[1].full_url, "https://index.example.test/v1/agent?agent_id=plow-base-hermes")
+        self.assertEqual(self.requests[1].full_url, "https://index.example.test/v1/agent?agent_id=hermes")
 
     def test_missing_index_is_normal(self):
         self.index = None
