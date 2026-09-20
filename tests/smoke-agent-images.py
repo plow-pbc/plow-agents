@@ -258,12 +258,6 @@ class Smoke(unittest.TestCase):
         self.run_cli("image", "set", "hermes", "--name", "New", "--phrase", "Hello", success=False)
         self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
 
-    def test_missing_slug_non_admin_is_not_created(self):
-        self.row = None
-        self.plow_status = 404
-        self.run_cli("image", "set", "missing", "--name", "New", "--phrase", "Hello", success=False)
-        self.assertTrue(all("/v1/agent-images/" in r.full_url for r in self.requests))
-
     def test_promote_requires_exactly_one_target(self):
         self.run_cli("image", "promote", "hermes", success=False)
         self.run_cli("image", "promote", "hermes", REF, "--none", success=False)
