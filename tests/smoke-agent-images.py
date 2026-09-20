@@ -216,24 +216,19 @@ class Smoke(unittest.TestCase):
         self.assertEqual(json.loads(out)["slug"], "hermes")
         self.assertIn("admitted", err)
 
-    def test_promote_admission_without_owner_does_not_write(self):
-        self.row = None
-        _, err = self.run_cli("image", "promote", "hermes", REF, success=False)
-        self.assertIn("creating a Plow row requires --owner <plow user uid>; nothing was sent", err)
-        self.assertEqual([r.method for r in self.requests], ["GET"])
-        self.assertFalse(self.writes())
-
-    def test_promote_admission_requires_index_listing(self):
-        self.row, self.index = None, None
-        _, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "owner-uid", success=False)
-        self.assertIn("register it on the leaderboard first (image set)", err)
-        self.assertFalse(self.writes())
-
-    def test_promote_admission_non_admin_is_explained(self):
-        self.row, self.plow_status = None, 404
-        _, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "owner-uid", success=False)
-        self.assertIn("not admitted to Plow yet; ask an admin", err)
-        self.assertEqual([r.method for r in self.writes()], ["PUT"])
+    def test_promote_admission_refusals(self):
+        cases = [
+            ([], self.index, 200, "creating a Plow row requires --owner <plow user uid>; nothing was sent", ["GET"]),
+            (["--owner", "owner-uid"], None, 200, "register it on the leaderboard first (image set)", ["GET", "GET"]),
+            (["--owner", "owner-uid"], self.index, 404, "not admitted to Plow yet; ask an admin", ["GET", "GET", "PUT"]),
+        ]
+        for extra, listing, status, message, methods in cases:
+            with self.subTest(message=message):
+                self.row, self.index, self.plow_status = None, listing, status
+                self.requests.clear()
+                _, err = self.run_cli("image", "promote", "hermes", REF, *extra, success=False)
+                self.assertIn(message, err)
+                self.assertEqual([r.method for r in self.requests], methods)
 
     def test_existing_promote_ignores_owner(self):
         _, err = self.run_cli("image", "promote", "hermes", REF, "--owner", "ignored-uid")
