@@ -87,6 +87,8 @@ class Stub(BaseHTTPRequestHandler):
         if self.path.startswith("/v1/agents/"):
             agent = AGENTS.get(self.path.rsplit("/", 1)[1])
             return self._send(Stub.agent_get_status if agent else 404, agent)
+        if self.path == "/v1/auth/owner-uid":
+            return self._send(200, {"owner_uid": "12345678-1234-4678-9234-567812345678"})
         if self.path == "/v1/auth/profile":
             return self._send(Stub.profile_get_status, {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
         self._send(404, {"detail": self.path})
@@ -253,6 +255,7 @@ def main() -> int:
 
         shown = run("profile", "--show", cwd=work, base=base, token=token)
         check("profile show exits 0", shown.returncode, 0)
+        check("profile show includes account uid", json.loads(shown.stdout)["uid"], "12345678-1234-4678-9234-567812345678")
         Stub.profile_get_status = 500
         failed_show = run("profile", "--show", cwd=work, base=base, token=token)
         check("profile show fails on a failed GET", failed_show.returncode != 0, True)
