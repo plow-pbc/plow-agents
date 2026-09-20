@@ -132,9 +132,10 @@ Inspect an admitted image with:
 
 ```sh
 plow-agents image show my-agent
+plow-agents image show my-agent | jq '.plow.image, .index.image'
 ```
 
-This public read needs no token. Its JSON has two labelled halves: **Pin (what Plow boots)** contains the current Plow digest, enabled state and signup phrases; **Listing (Agent Index)** contains the site's name, blurb, repository, media, installs and image. Different images stay visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
+This public read needs no token. Its JSON has two keys: `plow` contains the current Plow digest, enabled state and signup phrases; `index` contains the site's name, blurb, repository, media, installs and image, or `null` when the image is not on the Index. Different images stay visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
 
 To roll back, promote an older digest. To stop new provisions:
 

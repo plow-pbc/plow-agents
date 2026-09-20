@@ -154,14 +154,15 @@ class Smoke(unittest.TestCase):
     def test_show_uses_slug_and_needs_no_token(self):
         out, _ = self.run_cli("image", "show", "hermes", token=False)
         view = json.loads(out)
-        self.assertEqual(view["Pin (what Plow boots)"]["image"], REF)
-        self.assertEqual(view["Listing (Agent Index)"]["image"], "old")
+        self.assertEqual(set(view), {"plow", "index"})
+        self.assertEqual(view["plow"]["image"], REF)
+        self.assertEqual(view["index"]["image"], "old")
         self.assertEqual(self.requests[1].full_url, "https://index.example.test/v1/agent?agent_id=hermes")
 
     def test_missing_index_is_normal(self):
         self.index = None
         out, err = self.run_cli("image", "show", "hermes", token=False)
-        self.assertIsNone(json.loads(out)["Listing (Agent Index)"])
+        self.assertIsNone(json.loads(out)["index"])
         self.assertIn("not on the Agent Index", err)
         self.requests.clear()
         _, err = self.run_cli("image", "promote", "hermes", REF)

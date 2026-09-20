@@ -590,7 +590,7 @@ def index_listing(args: argparse.Namespace, slug: str) -> dict | None:
 
 
 def update_index(args: argparse.Namespace, slug: str, body: dict, token: str, *, promoting: bool = False) -> None:
-    log("Updating Listing (Agent Index)...")
+    log("Updating Agent Index listing...")
     if promoting and index_listing(args, slug) is None:
         return
     identity = call("GET", args.api_base, "/v1/auth/index-identity", token=token)
@@ -612,7 +612,7 @@ def update_index(args: argparse.Namespace, slug: str, body: dict, token: str, *,
 def image_show(args: argparse.Namespace) -> None:
     row = call("GET", args.api_base, agent_image_path(args.slug))
     site = index_listing(args, row["slug"])
-    print(json.dumps({"Pin (what Plow boots)": row, "Listing (Agent Index)": site}, indent=2))
+    print(json.dumps({"plow": row, "index": site}, indent=2))
 
 
 def promote_image(args: argparse.Namespace, slug: str, image: str | None, *, owner: str | None = None) -> None:
