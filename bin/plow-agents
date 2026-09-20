@@ -38,7 +38,7 @@ import urllib.request
 from typing import NoReturn
 
 DEFAULT_API_BASE = "https://api.plow.co"
-DEFAULT_INDEX_BASE = "https://tkmx.odio.dev"
+DEFAULT_INDEX_BASE = "https://agent-index-server.vercel.app"
 CREDENTIAL_FILE = "plow-credentials"
 POLL_S = 3
 CONFIG_FILE = "plow-agents.toml"
@@ -580,8 +580,12 @@ def agent_image_path(slug: str) -> str:
 
 def index_listing(args: argparse.Namespace, slug: str) -> dict | None:
     path = "/v1/agent?" + urllib.parse.urlencode({"agent_id": slug})
-    status, payload = request("GET", args.index_base + path)
+    url = args.index_base + path
+    status, payload = request("GET", url)
     if status == 404:
+        if not (isinstance(payload, dict) and payload.get("ok") is False
+                and isinstance(payload.get("error"), str) and payload["error"]):
+            die(f"misconfigured Index base: {url} answered {status} without an Index JSON error")
         log(f"{slug}: not on the Agent Index")
         return None
     if status // 100 != 2:
@@ -590,7 +594,7 @@ def index_listing(args: argparse.Namespace, slug: str) -> dict | None:
 
 
 def update_index(args: argparse.Namespace, slug: str, body: dict, token: str, *, promoting: bool = False) -> None:
-    log("Updating Listing (Agent Index)...")
+    log("Updating Agent Index listing...")
     if promoting and index_listing(args, slug) is None:
         return
     identity = call("GET", args.api_base, "/v1/auth/index-identity", token=token)
@@ -612,7 +616,7 @@ def update_index(args: argparse.Namespace, slug: str, body: dict, token: str, *,
 def image_show(args: argparse.Namespace) -> None:
     row = call("GET", args.api_base, agent_image_path(args.slug))
     site = index_listing(args, row["slug"])
-    print(json.dumps({"Pin (what Plow boots)": row, "Listing (Agent Index)": site}, indent=2))
+    print(json.dumps({"plow": row, "index": site}, indent=2))
 
 
 def promote_image(args: argparse.Namespace, slug: str, image: str | None, *, owner: str | None = None) -> None:

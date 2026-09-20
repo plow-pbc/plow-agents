@@ -132,9 +132,10 @@ Inspect an admitted image with:
 
 ```sh
 plow-agents image show my-agent
+plow-agents image show my-agent | jq '.plow.image, .index.image'
 ```
 
-This public read needs no token. Its JSON has two labelled halves: **Pin (what Plow boots)** contains the current Plow digest, enabled state and signup phrases; **Listing (Agent Index)** contains the site's name, blurb, repository, media, installs and image. Different images stay visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
+This public read needs no token. Its JSON has two keys: `plow` contains the current Plow digest, enabled state and signup phrases; `index` contains the site's name, blurb, repository, media, installs and image, or `null` when the image is not on the Index. Different images stay visible side by side. The Plow slug is also the Agent Index identity; Hermes uses `hermes` in both stores.
 
 To roll back, promote an older digest. To stop new provisions:
 
@@ -170,7 +171,10 @@ plow-agents --api-base http://127.0.0.1:19034 --index-base http://127.0.0.1:3847
 ```
 
 `--index-base` overrides `PLOW_INDEX_BASE`; otherwise the production Index is
-`https://tkmx.odio.dev`. HTTPS is required except for the supported local development hosts.
+`https://agent-index-server.vercel.app`. HTTPS is required except for the supported local development hosts.
+A missing listing is recognized only from a JSON 404 with the Index error shape
+(`{"ok": false, "error": "no such agent"}`). An HTML or malformed 404 fails with
+the requested URL and status so a misconfigured Index base is not mistaken for an absent listing.
 
 ## Leaderboard
 

@@ -20,7 +20,7 @@ REF = "ghcr.io/example/agent@sha256:" + "a" * 64
 
 class Response(io.BytesIO):
     def __init__(self, body, code=200):
-        super().__init__(json.dumps(body).encode())
+        super().__init__(body if isinstance(body, bytes) else json.dumps(body).encode())
         self.status = code
 
 
@@ -64,7 +64,7 @@ class Smoke(unittest.TestCase):
             return Response({"assertion": "synthetic-index-assertion"})
         if "/v1/agent?" in req.full_url:
             self.assertIsNone(req.get_header("Authorization"))
-            return Response(self.index or {"error": "no such agent"}, 200 if self.index else 404)
+            return Response(self.index or {"ok": False, "error": "no such agent"}, 200 if self.index else 404)
         if "/v1/agents?" in req.full_url:
             slug = urllib.parse.parse_qs(urllib.parse.urlsplit(req.full_url).query)["agent_id"][0]
             self.assertEqual(slug, self.row["slug"] if self.row else "hermes")
@@ -154,19 +154,45 @@ class Smoke(unittest.TestCase):
     def test_show_uses_slug_and_needs_no_token(self):
         out, _ = self.run_cli("image", "show", "hermes", token=False)
         view = json.loads(out)
-        self.assertEqual(view["Pin (what Plow boots)"]["image"], REF)
-        self.assertEqual(view["Listing (Agent Index)"]["image"], "old")
+        self.assertEqual(set(view), {"plow", "index"})
+        self.assertEqual(view["plow"]["image"], REF)
+        self.assertEqual(view["index"]["image"], "old")
         self.assertEqual(self.requests[1].full_url, "https://index.example.test/v1/agent?agent_id=hermes")
 
     def test_missing_index_is_normal(self):
         self.index = None
         out, err = self.run_cli("image", "show", "hermes", token=False)
-        self.assertIsNone(json.loads(out)["Listing (Agent Index)"])
+        self.assertIsNone(json.loads(out)["index"])
         self.assertIn("not on the Agent Index", err)
         self.requests.clear()
         _, err = self.run_cli("image", "promote", "hermes", REF)
         self.assertIn("not on the Agent Index", err)
         self.assertEqual([r.method for r in self.writes()], ["PUT"])
+
+    def test_show_rejects_misconfigured_index_404(self):
+        original = self.http
+        for body in (b"<html>Not Found</html>", {}, {"error": "no such agent"},
+                     {"ok": False, "error": None}, {"ok": True, "error": "no such agent"}):
+            with self.subTest(body=body):
+                def missing_route(req, *args, **kwargs):
+                    if "/v1/agent?" in req.full_url:
+                        return Response(body, 404)
+                    return original(req, *args, **kwargs)
+
+                with patch("urllib.request.OpenerDirector.open", side_effect=missing_route):
+                    out, err = self.run_cli("image", "show", "hermes", token=False, success=False)
+                self.assertEqual(out, "")
+                self.assertIn("misconfigured Index base", err)
+                self.assertIn("https://index.example.test/v1/agent?agent_id=hermes", err)
+                self.assertIn("404", err)
+                self.assertNotIn("not on the Agent Index", err)
+
+    def test_default_index_base(self):
+        with patch.dict(os.environ):
+            os.environ.pop("PLOW_INDEX_BASE", None)
+            self.run_cli("image", "show", "hermes", token=False, index_base=None)
+        self.assertEqual(self.requests[-1].full_url,
+                         "https://agent-index-server.vercel.app/v1/agent?agent_id=hermes")
 
     def test_set_claims_index_without_admitting_to_plow(self):
         self.row, self.index = None, None
