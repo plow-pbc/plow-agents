@@ -171,7 +171,10 @@ plow-agents --api-base http://127.0.0.1:19034 --index-base http://127.0.0.1:3847
 ```
 
 `--index-base` overrides `PLOW_INDEX_BASE`; otherwise the production Index is
-`https://tkmx.odio.dev`. HTTPS is required except for the supported local development hosts.
+`https://agent-index-server.vercel.app`. HTTPS is required except for the supported local development hosts.
+A missing listing is recognized only from a JSON 404 with the Index error shape
+(`{"ok": false, "error": "no such agent"}`). An HTML or malformed 404 fails with
+the requested URL and status so a misconfigured Index base is not mistaken for an absent listing.
 
 ## Leaderboard
 
