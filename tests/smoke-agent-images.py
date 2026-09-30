@@ -157,7 +157,7 @@ class Smoke(unittest.TestCase):
         self.assertEqual(set(view), {"plow", "index"})
         self.assertEqual(view["plow"]["image"], REF)
         self.assertEqual(view["index"]["image"], "old")
-        self.assertEqual(self.requests[1].full_url, "https://index.example.test/v1/agent?agent_id=hermes")
+        self.assertEqual(self.requests[1].full_url, "https://index.example.test/v1/agent?agent_id=hermes&fresh=1")
 
     def test_missing_index_is_normal(self):
         self.index = None
@@ -183,7 +183,7 @@ class Smoke(unittest.TestCase):
                     out, err = self.run_cli("image", "show", "hermes", token=False, success=False)
                 self.assertEqual(out, "")
                 self.assertIn("misconfigured Index base", err)
-                self.assertIn("https://index.example.test/v1/agent?agent_id=hermes", err)
+                self.assertIn("https://index.example.test/v1/agent?agent_id=hermes&fresh=1", err)
                 self.assertIn("404", err)
                 self.assertNotIn("not on the Agent Index", err)
 
@@ -192,7 +192,7 @@ class Smoke(unittest.TestCase):
             os.environ.pop("PLOW_INDEX_BASE", None)
             self.run_cli("image", "show", "hermes", token=False, index_base=None)
         self.assertEqual(self.requests[-1].full_url,
-                         "https://agent-index-server.vercel.app/v1/agent?agent_id=hermes")
+                         "https://agent-index-server.vercel.app/v1/agent?agent_id=hermes&fresh=1")
 
     def test_set_claims_index_without_admitting_to_plow(self):
         self.row, self.index = None, None
