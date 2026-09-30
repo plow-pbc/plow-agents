@@ -579,7 +579,9 @@ def agent_image_path(slug: str) -> str:
 
 
 def index_listing(args: argparse.Namespace, slug: str) -> dict | None:
-    path = "/v1/agent?" + urllib.parse.urlencode({"agent_id": slug})
+    # fresh=1: the Index CDN-caches this read for 20s, and this runs right after
+    # an image set or promote, so the cached copy would show the old image.
+    path = "/v1/agent?" + urllib.parse.urlencode({"agent_id": slug, "fresh": "1"})
     url = args.index_base + path
     status, payload = request("GET", url)
     if status == 404:
