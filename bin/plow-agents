@@ -269,14 +269,22 @@ def revoke_replaced_key(api_base: str, token: str, replaced: str) -> None:
     that key as live as it already was, and says which one.
     """
     prefix = replaced[5:13]
-    status, keys = request("GET", api_base + "/v1/keys", token=token)
+
+    def ask(method: str, path: str) -> tuple[int | None, object]:
+        try:
+            return request(method, api_base + path, token=token)
+        except SystemExit as unreachable:  # request() dies on a transport failure; the login has already succeeded
+            log(str(unreachable))
+            return None, None
+
+    status, keys = ask("GET", "/v1/api-keys")
     if status != 200 or not isinstance(keys, list):
         log(f"Could not list keys (status {status}); the key this login replaced ({prefix}...) is still live.")
         return
     for key in keys:
         if key.get("name") == "plow-agents" and key.get("key_prefix") == prefix and key.get("is_active"):
-            status, _ = request("DELETE", f"{api_base}/v1/keys/{key['id']}", token=token)
-            log(f"Revoked the key this login replaced ({prefix}...)." if status // 100 == 2
+            status, _ = ask("DELETE", f"/v1/api-keys/{key['id']}")
+            log(f"Revoked the key this login replaced ({prefix}...)." if status is not None and status // 100 == 2
                 else f"Could not revoke the key this login replaced ({prefix}..., status {status}); it is still live.")
 
 
