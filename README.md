@@ -187,9 +187,15 @@ set -a; . ./plow-credentials; set +a
 python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agent name>" --blurb "<one line>"
 ```
 
-3. The reporter runs as an s6 longrun in your image; see [Building a variant image](https://github.com/plow-pbc/plow-hermes-agent/blob/main/README.md#building-a-variant-image) for how to add one. Copy the [life-assistant agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and its [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile).
+3. Both bases already include the reporter; see the [Hermes](https://github.com/plow-pbc/plow-hermes-agent#the-agent-index-reporter) and [OpenClaw](https://github.com/plow-pbc/plow-openclaw-agent#behaviour-and-failures) docs.
 
-Add `AGENT_ID` under `environment` in your agent service in `compose.yml`, set your registered ID, then rebuild and start it. Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
+Either reporter runs only when `AGENT_ID` is set. Put your registered ID in your Dockerfile, then rebuild, push and redeploy:
+
+```dockerfile
+ENV AGENT_ID=<your-agent-id>
+```
+
+The image is the only place a deploy by digest (`plow-agents deploy <image>@sha256:… --line …`) can get the ID: Plow passes `AGENT_ID` only to agents installed from an admitted image (a one-click install or `deploy exe:<slug>`), and a cloud deploy reads no `compose.yml`. Without it the agent works but reports nothing, not even "measurement pending". Reports appear on the [leaderboard](https://aiworthusing.com/agent-index).
 
 `profile` sets your account's public name and photo. `--photo` takes a local file Plow hosts, or a public HTTPS URL.
 
