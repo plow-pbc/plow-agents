@@ -58,6 +58,8 @@ class Stub(BaseHTTPRequestHandler):
     posts: list[str] = []
     minted: list[dict] = []
     revoked: list[str] = []
+    revoked_keys: list[str] = []
+    keys_drop = False
     profile_updates: list[dict] = []
     photo_uploads: list[dict[str, tuple[str, bytes]]] = []
     requests: list[str] = []
@@ -91,6 +93,17 @@ class Stub(BaseHTTPRequestHandler):
             return self._send(200, {"owner_uid": "12345678-1234-4678-9234-567812345678"})
         if self.path == "/v1/auth/profile":
             return self._send(Stub.profile_get_status, {"display_name": "Ada", "photo_url": "https://example.com/ada.jpg"})
+        if self.path == "/v1/api-keys":
+            if Stub.keys_drop:
+                self.close_connection = True   # the connection drops: no response at all
+                return
+            # The key the token file held ("acct_stub": prefix "stub"), another
+            # machine's plow-agents key, and a same-prefix key under another name.
+            return self._send(200, [
+                {"id": 7, "name": "plow-agents", "key_prefix": "stub", "is_active": True},
+                {"id": 8, "name": "plow-agents", "key_prefix": "elsewhr", "is_active": True},
+                {"id": 9, "name": "agent", "key_prefix": "stub", "is_active": True},
+            ])
         self._send(404, {"detail": self.path})
 
     def do_PATCH(self) -> None:  # noqa: N802
@@ -139,6 +152,9 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         Stub.requests.append(f"DELETE {self.path}")
+        if self.path.startswith("/v1/api-keys/"):
+            Stub.revoked_keys.append(self.path.rsplit("/", 1)[1])
+            return self._send(200, {"status": "revoked"})
         if self.path.startswith("/v1/agents/"):
             if Stub.delete_status != 200:
                 return self._send(Stub.delete_status, {"detail": "delete failed"})
@@ -306,7 +322,19 @@ def main() -> int:
 
         Stub.requests.clear()
         logged_in = run("login", cwd=work, base=base, token=token)
-        check("login finishes without checking pool lines", logged_in.returncode == 0 and Stub.requests == ["POST /v1/auth/activate", "POST /v1/auth/activate/redeem"], True)
+        check("login finishes without checking pool lines", logged_in.returncode == 0 and Stub.requests[:2] == ["POST /v1/auth/activate", "POST /v1/auth/activate/redeem"] and not any("/v1/lines" in r for r in Stub.requests), True)
+        # plow#2280 / #38: the key the token file held is revoked, and only that one.
+        check("login revokes the key it replaced, and no other", Stub.revoked_keys, ["7"])
+        check("login writes the new token", open(token).read(), "synthetic_account_token\n")
+        # A dropped connection during the cleanup must not fail a login that already succeeded.
+        Stub.keys_drop, Stub.revoked_keys = True, []
+        with open(token, "w") as handle:
+            handle.write("acct_stub\n")
+        dropped = run("login", cwd=work, base=base, token=token)
+        check("login survives a dropped cleanup, saying the old key is still live",
+              (dropped.returncode, open(token).read(), "(stub...) is still live" in dropped.stderr, Stub.revoked_keys),
+              (0, "synthetic_account_token\n", True, []))
+        Stub.keys_drop = False
         credential = os.path.join(work, "plow-credentials")
         os.mkdir(credential)
         directory = run("mint", FREE, cwd=work, base=base, token=token)
