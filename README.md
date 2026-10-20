@@ -128,6 +128,8 @@ docker compose down -v
 
    `--owner` is ignored with a note when the Plow row already exists; promotion does not change ownership. The image must be publicly pullable. Plow checks its manifest before accepting the pin. Promotion affects new agents; running agents keep their images.
 
+4. Get the one-click Deploy button. Your listing's live **Text this agent** button sends the signup phrase from step 2. It switches on when a Plow admin marks the listing deployable on the Agent Index, a separate mark from admission. Until then the listing shows the button greyed out. Make sure an agent from your admitted image answers its first text. Then post your repository, the commit hash and your Agent Index ID in the [Discord verification thread](https://discord.com/channels/1519035948191449268/1549100840583700481).
+
 Inspect an admitted image with:
 
 ```sh
