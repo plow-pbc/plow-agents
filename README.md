@@ -203,7 +203,7 @@ plow-agents profile --show
 
 | Command | Purpose |
 | --- | --- |
-| `plow-agents login` | Log in by text. |
+| `plow-agents login` | Log in by text. Logging in again revokes the key the token file held, so re-logins leave no extra keys behind. |
 | `plow-agents lines` | Show the phone lines an agent can be deployed on, with IDs, numbers, and availability. |
 | `plow-agents profile [--name NAME] [--photo PHOTO] [--show]` | Set or show your profile; a photo can be a file or HTTPS URL. |
 | `plow-agents mint LINE [--credential-file PATH] [--agent-api-base URL]` | Write a credential for a self-hosted agent. |
