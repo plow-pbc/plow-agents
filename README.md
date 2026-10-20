@@ -187,7 +187,7 @@ set -a; . ./plow-credentials; set +a
 python3 agent_index_client.py --register --agent "<your-agent-id>" --name "<Agent name>" --blurb "<one line>"
 ```
 
-3. On the Hermes base, the reporter runs as an s6 longrun in your image; see [Building a variant image](https://github.com/plow-pbc/plow-hermes-agent/blob/main/README.md#building-a-variant-image) for how to add one. Copy the [life-assistant agent-index service](https://github.com/plow-pbc/life-assistant-hermes-agent/tree/main/image/s6-overlay/s6-rc.d/agent-index) and its [client installation](https://github.com/plow-pbc/life-assistant-hermes-agent/blob/main/Dockerfile). The [OpenClaw base](https://github.com/plow-pbc/plow-openclaw-agent#building-a-variant-image) already runs it at boot.
+3. Both bases already include the reporter; see the [Hermes](https://github.com/plow-pbc/plow-hermes-agent#the-agent-index-reporter) and [OpenClaw](https://github.com/plow-pbc/plow-openclaw-agent#behaviour-and-failures) docs.
 
 Either reporter runs only when `AGENT_ID` is set. Put your registered ID in your Dockerfile, then rebuild, push and redeploy:
 
