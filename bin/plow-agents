@@ -114,7 +114,7 @@ def write_private(path: str, body: str) -> str:
     leaves the previous credential intact.
     """
     destination = os.path.abspath(path)
-    directory = os.path.dirname(destination) or "."
+    directory = os.path.dirname(destination)
     os.makedirs(directory, mode=0o700, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".plow-agents.", suffix=".new")
     try:
@@ -513,6 +513,11 @@ def dockerignore_patterns(path: str) -> list[tuple[re.Pattern[str], bool]]:
     return patterns
 
 
+def dockerignored(patterns: list[tuple[re.Pattern[str], bool]], relative: str) -> bool:
+    """Whether Docker leaves `relative` out of the build context: the last matching rule decides."""
+    return next((exclude for pattern, exclude in reversed(patterns) if pattern.match(relative)), False)
+
+
 def refuse_credentials(args: argparse.Namespace, ignore_file: str) -> None:
     account_file = os.path.realpath(token_path(args.token_file))
     patterns = dockerignore_patterns(ignore_file)
@@ -522,12 +527,8 @@ def refuse_credentials(args: argparse.Namespace, ignore_file: str) -> None:
         for filename in files:
             path = os.path.join(directory, filename)
             relative = os.path.relpath(path)
-            excluded = False
-            for pattern, exclude in patterns:
-                if pattern.match(relative):
-                    excluded = exclude
             # Docker always reads the build Dockerfile, even when ignored.
-            if excluded and relative != "Dockerfile":
+            if dockerignored(patterns, relative) and relative != "Dockerfile":
                 continue
             if os.path.realpath(path) == account_file:
                 die(f"add {relative} to {ignore_file} before building")
@@ -685,11 +686,7 @@ def deploy(args: argparse.Namespace) -> None:
         if args.target:
             die("--local takes no target; it starts this checkout's Compose project")
         ignore_file = "Dockerfile.dockerignore" if os.path.exists("Dockerfile.dockerignore") else ".dockerignore"
-        excluded = False
-        for pattern, exclude in dockerignore_patterns(ignore_file):
-            if pattern.match(CREDENTIAL_FILE):
-                excluded = exclude
-        if not excluded:
+        if not dockerignored(dockerignore_patterns(ignore_file), CREDENTIAL_FILE):
             die(f"add {CREDENTIAL_FILE} to {ignore_file} before building")
     else:
         if args.agent_api_base is not None:
