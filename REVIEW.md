@@ -10,7 +10,8 @@ themselves and is deliberately not restated here.
 own.** One stdlib-only Python CLI over the credential lifecycle — `login`,
 `lines`, `mint`, `revoke` — plus a minimal `compose.example.yml` to
 copy into a new agent repository. It builds and mints; it does not own the
-image, the API, or the container.
+image, the API, or the container. `agents/<name>/` holds agent templates
+(prompts, routines, their wake units); their data lives in private repos.
 
 **Stage:** pre-PMF, a single operator, a handful of agents. Iteration speed
 beats hardening for scale: prefer loud failures to fallbacks, and don't guard

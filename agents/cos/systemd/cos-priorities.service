@@ -1,0 +1,10 @@
+[Unit]
+Description=Wake the CoS sous for the priority nudge routine
+
+[Service]
+Type=oneshot
+# Edit these three for your CoS kitchen and its data checkout.
+Environment=KITCHEN_SOCK=%h/.claude-kitchen/kitchen-agents-cos/kitchen.sock
+Environment=PRIORITIES_ROUTINE=%h/Hacking/plow-agents/agents/cos/priorities/ROUTINE.md
+Environment=PRIORITIES_FILE=%h/Hacking/priorities/so.md
+ExecStart=/usr/bin/python3 -I %h/Hacking/plow-agents/agents/cos/wake.py

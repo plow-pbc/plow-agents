@@ -13,3 +13,4 @@ jobs:
       - run: python3 tests/smoke-line-in-use.py
       - run: python3 tests/smoke-deploy.py
       - run: python3 tests/smoke-agent-images.py
+      - run: python3 tests/smoke-cos-wake.py
