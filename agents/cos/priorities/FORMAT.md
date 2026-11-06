@@ -23,6 +23,7 @@ Owner timezone: America/Los_Angeles
 - next step: <one sentence>
 - thread: <Swarm thread link>
 - status: open
+- cadence: hourly
 - last_nudged: 2026-11-06T18:00Z
 - added_by: @owner:acme.swarm.plow.co
 - done_confirmed_by:
@@ -33,6 +34,8 @@ Owner timezone: America/Los_Angeles
   itself is needed.
 - **status** is `open` or `done`. An item is `done` only once the owner has
   confirmed it; `done_confirmed_by` names who confirmed.
+- **cadence** is `hourly` or `daily`: how often the blocker may be nudged.
+  Blank or missing means `hourly`.
 - **last_nudged** is UTC, `YYYY-MM-DDTHH:MMZ`, blank until the first nudge.
 - **Members** gives each blocker's kind and timezone. A human with no
   timezone uses the owner's. Agents have none: quiet hours don't apply to them.

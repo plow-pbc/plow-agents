@@ -14,6 +14,7 @@ Owner timezone: America/Los_Angeles
 - next step: Open the PR from the branch already pushed and request review.
 - thread: https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event
 - status: open
+- cadence: hourly
 - last_nudged:
 - added_by: @owner:acme.swarm.plow.co
 - done_confirmed_by:
@@ -24,6 +25,7 @@ Owner timezone: America/Los_Angeles
 - next step: Send back the redlines on sections 4 and 7.
 - thread: https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event-2
 - status: open
+- cadence: daily
 - last_nudged: 2026-11-06T14:00Z
 - added_by: @owner:acme.swarm.plow.co
 - done_confirmed_by:
@@ -34,6 +36,7 @@ Owner timezone: America/Los_Angeles
 - next step: Done; the owner confirmed the booking.
 - thread: https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event-3
 - status: done
+- cadence: hourly
 - last_nudged: 2026-11-05T16:00Z
 - added_by: @owner:acme.swarm.plow.co
 - done_confirmed_by: @owner:acme.swarm.plow.co

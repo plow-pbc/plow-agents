@@ -8,8 +8,9 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
       do it, then update `blocker` and `next step` to what is left. If a
       reply in the item's thread changed the blocker, record that too.
    2. If it still waits on someone else, nudge only when both hold:
-      - `last_nudged` is blank or at least 60 minutes ago (check with
-        `date -u`);
+      - `last_nudged` is blank or its `cadence` interval has passed: 60
+        minutes for `hourly` (the default), 24 hours for `daily` (check
+        with `date -u`);
       - the blocker is an agent, or a human whose local time (their
         timezone from Members, else the owner's) is between 08:00 and 21:00.
         Check with `TZ=<zone> date +%H:%M`.
