@@ -4,7 +4,7 @@ Build an agent image, run it on Plow, and text it from your phone.
 
 ## What you need
 
-Python 3.11 or newer, Git, Docker, a registry account that can publish public images,
+[uv](https://docs.astral.sh/uv/getting-started/installation/), Git, Docker, a registry account that can publish public images,
 and a phone that can send an activation text. For local runs, use Docker Compose
 2.24 or newer and an agent repository with a Dockerfile and `compose.yml`.
 
