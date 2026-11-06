@@ -2,6 +2,8 @@
 
 Build an agent image, run it on Plow, and text it from your phone.
 
+Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs.
+
 ## What you need
 
 [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, Docker, a registry account that can publish public images,
