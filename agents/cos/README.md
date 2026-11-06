@@ -14,7 +14,7 @@ blocks the rest in the item's Swarm thread.
 - `wake.py` and `systemd/`: the hourly wake. It writes one line into the CoS
   kitchen's socket, the same way kitchen cooks report back.
 
-Install for a CoS kitchen (edit the three `Environment=` paths first):
+Install for a CoS kitchen (first edit the socket, data file and `ExecStart` paths in the service):
 
 ```sh
 cp agents/cos/systemd/cos-priorities.{service,timer} ~/.config/systemd/user/

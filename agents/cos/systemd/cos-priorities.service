@@ -3,8 +3,8 @@ Description=Wake the CoS sous for the priority nudge routine
 
 [Service]
 Type=oneshot
-# Edit these three for your CoS kitchen and its data checkout.
+# Edit all three for your CoS: its kitchen socket, the owner's file in a
+# checkout of the private data repo, and this repo's deployed clone.
 Environment=KITCHEN_SOCK=%h/.claude-kitchen/kitchen-agents-cos/kitchen.sock
-Environment=PRIORITIES_ROUTINE=%h/Hacking/plow-agents/agents/cos/priorities/ROUTINE.md
-Environment=PRIORITIES_FILE=%h/Hacking/priorities/so.md
-ExecStart=/usr/bin/python3 -I %h/Hacking/plow-agents/agents/cos/wake.py
+Environment=PRIORITIES_FILE=%h/data/priorities/so.md
+ExecStart=/usr/bin/python3 -I %h/services/plow-agents/agents/cos/wake.py

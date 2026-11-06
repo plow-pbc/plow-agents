@@ -1,8 +1,9 @@
 #!/usr/bin/python3
-"""Wake the CoS sous with the priority nudge routine. A dead socket fails the unit."""
-import json, os, socket, time
+"""Wake the CoS sous with the priority nudge routine beside this file. A dead socket fails the unit."""
+import json, os, pathlib, socket, time
 
-sock, routine, data = (os.environ[k] for k in ("KITCHEN_SOCK", "PRIORITIES_ROUTINE", "PRIORITIES_FILE"))
+routine = pathlib.Path(__file__).resolve().parent / "priorities/ROUTINE.md"
+sock, data = os.environ["KITCHEN_SOCK"], os.environ["PRIORITIES_FILE"]
 text = f"Priority nudge run (scheduled). Follow {routine} against {data}."
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.connect(sock)
