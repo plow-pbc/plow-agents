@@ -25,8 +25,12 @@ jq '.skipDangerousModePermissionPrompt=true' ~/.claude/settings.json >~/.claude/
 mkdir -p ~/feedback && cp /opt/feedback/CLAUDE.md ~/feedback/CLAUDE.md
 tmux new-session -d -s feedback -c ~/feedback \
   'while true; do kitchen open --model opus --resume || kitchen open --model opus; sleep 5; done'
-# The sous loads swarm as a development channel; confirm that prompt each time it shows.
+# The sous loads swarm as a development channel; confirm that dialog (its first
+# option is preselected) only while it is up, before Claude's welcome banner.
 while tmux has-session -t feedback 2>/dev/null; do
-  tmux capture-pane -p -t feedback | grep -q "I am using this for local development" && tmux send-keys -t feedback Enter
+  pane=$(tmux capture-pane -p -t feedback)
+  if grep -q "Loading development channels" <<<"$pane" && ! grep -q "Claude Code v" <<<"$pane"; then
+    tmux send-keys -t feedback Enter
+  fi
   sleep 5
 done
