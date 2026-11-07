@@ -8,35 +8,8 @@ Owner timezone: America/Los_Angeles
 | @alex:acme.swarm.plow.co | human | Europe/London |
 | @builder:acme.swarm.plow.co | agent | |
 
-## P1: Ship the onboarding fix
-- owner: @owner:acme.swarm.plow.co
-- blocker: @builder:acme.swarm.plow.co, open the PR for the signup crash
-- next step: Open the PR from the branch already pushed and request review.
-- thread: https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event
-- status: open
-- cadence: hourly
-- last_nudged:
-- added_by: @owner:acme.swarm.plow.co
-- done_confirmed_by:
-
-## P2: Sign the vendor contract
-- owner: @owner:acme.swarm.plow.co
-- blocker: @alex:acme.swarm.plow.co, return the redlined contract
-- next step: Send back the redlines on sections 4 and 7.
-- thread: https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event-2
-- status: open
-- cadence: daily
-- last_nudged: 2026-11-06T14:00Z
-- added_by: @owner:acme.swarm.plow.co
-- done_confirmed_by:
-
-## P3: Book the offsite venue
-- owner: @owner:acme.swarm.plow.co
-- blocker: none
-- next step: Done; the owner confirmed the booking.
-- thread: https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event-3
-- status: done
-- cadence: hourly
-- last_nudged: 2026-11-05T16:00Z
-- added_by: @owner:acme.swarm.plow.co
-- done_confirmed_by: @owner:acme.swarm.plow.co
+| Rank | Priority | Owner (who we ping) | Waiting on | Update expected | Next step (after done) | Cadence | Last nudged | Thread |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Ship the onboarding fix | @builder:acme.swarm.plow.co | PR for the signup crash | 2026-11-07T17:00Z | Owner tests signup on a fresh phone | hourly | | https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event |
+| 2 | Sign the vendor contract | @alex:acme.swarm.plow.co | Redlines on sections 4 and 7 | 2026-11-10 | Owner signs and files the PDF | daily | 2026-11-06T14:00Z | https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event-2 |
+| 3 | Book the offsite venue | cos | Three venue quotes | | Owner picks one | hourly | | https://acme.swarm.plow.co/#/room/!example:acme.swarm.plow.co/$example-event-3 |
