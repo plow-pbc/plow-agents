@@ -5,33 +5,38 @@ One markdown file per owner (`so.md`, `mary.md`, ...) in that owner's
 here; the data never does. [`example.md`](example.md) is a filled-in file
 with no real data.
 
-A file has a header, a members table, the owner's goals, and one ranked
-priorities table:
+A file has a header, the owner's goals, a members table, and one ranked
+priorities table. The `## Members` and `## Priorities` headings are optional:
 
 ```markdown
 # Priorities: <owner handle>
 
 Owner timezone: America/Los_Angeles
 
+## Goals
+
+1. **get-users**: <goal, in the owner's words>
+2. **fundraise**: <goal>
+
+## Members
+
 | Member | Kind | Timezone |
 |---|---|---|
 | @alex:acme.swarm.plow.co | human | America/New_York |
 | @builder:acme.swarm.plow.co | agent | |
 
-## Goals
-
-- **G1**: <goal>
-- **G2**: <goal>
+## Priorities
 
 | Rank | Priority | Supporting goal | Owner (who we ping) | Waiting on | Update expected | Next step (after done) | Cadence | Last nudged | Thread |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | <title> | G1 | @alex:acme.swarm.plow.co | <what they owe> | 2026-11-07 | <what happens once it's in> | hourly | 2026-11-06T18:00Z | <Swarm thread link> |
+| 1 | <title> | get-users | @alex:acme.swarm.plow.co | <what they owe> | 2026-11-07 | <what happens once it's in> | hourly | 2026-11-06T18:00Z | <Swarm thread link> |
 ```
 
 - **Rank** orders the table, 1 first. Re-rank by editing; the row order follows it.
-- **Goals** are the owner's own, a few at most, each with a `G<n>` id that
-  is never reused.
-- **Supporting goal** is the `G<n>` this row moves forward, or `none`.
+- **Goals** are the owner's own, a few at most, each with a short id in the
+  owner's words (`get-users`, `cofounder`).
+- **Supporting goal** is the id of the goal this row moves forward, or `none`.
+  It informs ranking and reporting; the routine doesn't act on it.
 - **Owner (who we ping)** is one member: the one the item waits on and the
   one a nudge mentions. `cos` when only the CoS itself is needed.
 - **Waiting on** is what that owner owes, in a few words.
