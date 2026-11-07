@@ -1,9 +1,13 @@
 # Priorities file format
 
-One markdown file per owner (`so.md`, `mary.md`, ...) in that owner's
-**private** data repository (Plow's own: `plow-pbc/priorities`). The format lives
-here; the data never does. [`example.md`](example.md) is a filled-in file
-with no real data.
+One markdown file per owner, kept private: either in a private git
+repository (`so.md`, `mary.md`, ...) or as a page in the owner's Plow wiki on
+their Mac (`~/Plow/wiki/entities/owner/priorities.md`), reached through latch.
+The format lives here; the data never does. [`example.md`](example.md) is a
+filled-in file with no real data.
+
+A wiki page keeps its YAML frontmatter above the title, and its `updated:`
+date moves to today on every write.
 
 A file has a header, the owner's goals, a members table, and one ranked
 priorities table. The `## Members` and `## Priorities` headings are optional:
