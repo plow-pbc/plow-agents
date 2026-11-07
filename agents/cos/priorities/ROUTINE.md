@@ -32,8 +32,9 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
    - wiki: get the page again; if its `sha256` changed since your first get,
      redo your row edits on the fresh copy. Set the frontmatter's `updated:`
      to today, then `latch file put --host <host> <copy> '<path>'` and
-     `latch exec --host <host> --network -- wiki snapshot --push`. If either
-     fails, say so in your report.
+     `latch exec --host <host> --network --write '~/Plow/wiki.git' -- wiki snapshot --push`
+     (the snapshot commits into the wiki's git directory). If either fails,
+     say so in your report.
 
    Report one line per nudge or skip to the owner's DM only when
    something moved; a wake with nothing due says nothing.
