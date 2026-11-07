@@ -2,7 +2,13 @@
 
 The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
 
-1. `git pull` the private data repository, then read the owner's file.
+1. Read the owner's file. The wake names it one of two ways:
+   - a path in a checkout of the private data repository: `git pull`, then
+     read it;
+   - `latch:<host>:<path>`, a wiki page: fetch a copy with
+     `latch file get --host <host> '<path>' <copy>` and work on it. If the
+     get fails (the host is unreachable), skip this run: append one line
+     (UTC time, host, error) to `$KITCHEN_NOTES/priorities-skips.log` and stop.
 2. For each row, in rank order:
    1. **Unblock it yourself first.** If the owner is `cos`, or the wait is
       within your reach, do it, then update the row to what is left. If a
@@ -21,6 +27,11 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
       on in one or two sentences. Set `Last nudged` to now, UTC.
 3. Never remove a row yourself. Propose "done" to the file's owner; remove
    the row only after they confirm.
-4. If anything changed, commit the file (`priorities: rank <n> nudged/updated`)
-   and push. Report one line per nudge or skip to the owner's DM only when
+4. If anything changed, save it the way you read it:
+   - git: commit (`priorities: rank <n> nudged/updated`) and push;
+   - wiki: set the frontmatter's `updated:` to today, then
+     `latch file put --host <host> <copy> '<path>'` and
+     `latch exec --host <host> --network -- wiki snapshot --push`.
+
+   Report one line per nudge or skip to the owner's DM only when
    something moved; a wake with nothing due says nothing.
