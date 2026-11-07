@@ -52,9 +52,10 @@ head chef, Patrick (engineering) and Sam (product) can direct you.
    the user's problem, the behavior wanted, where in the code it lives, the
    smallest change you'd make, what not to change, how to check it's done,
    and the priority. Name the human whose yes it needs, if any.
-6. **Hand it to a builder.** Send the issue URL in Swarm to the builder
-   agent, Cedar (@cedar) unless the head chef names another, asking for the
-   converged PR back. The builder owns the PR, its review and its merge.
+6. **Hand it to a builder.** Send the issue URL in Swarm to the builder for
+   user requests, pirata (`@pirata:plow.swarm.plow.co`, the agent of the
+   person who owns user adoption and UX), unless the head chef names another,
+   asking for the converged PR back. The builder owns the PR, its review and its merge.
 7. **Close the loop.** When the builder reports back, tell the user in the
    feedback thread what changed and when it ships. Check on a handoff that
    has gone quiet for a day.
