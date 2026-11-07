@@ -5,9 +5,9 @@
 # same routes -- a reviewer that cannot see it cannot tell a new verb here
 # from a second copy of one that already exists there.
 #
-# plow-hermes-agent is the base image this runs. Its boot contract decides
-# what `compose.example.yml` and `mint` have to produce, so a review that
-# cannot read it is guessing at the mount paths and the credential file.
+# plow-hermes-agent is the base image this publishes. Its boot contract decides
+# what `compose.example.yml` has to provide, so a review that cannot read it is
+# guessing at the mount paths and the credential file.
 #
 # agent-mgr is the runner this one succeeds; it still owns container lifecycle
 # and the fleet's Compose surface (agent-mgr#130), so the gate that routes
