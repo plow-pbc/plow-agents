@@ -8,5 +8,5 @@ Type=oneshot
 # repo, or a wiki page on the owner's Mac as latch:<host>:<path>, e.g.
 # latch:mba:~/Plow/wiki/entities/owner/priorities.md
 Environment=KITCHEN_SOCK=%h/.claude-kitchen/kitchen-agents-cos/kitchen.sock
-Environment=PRIORITIES_FILE=%h/data/priorities/so.md
+Environment=PRIORITIES_FILE=latch:mba:~/Plow/wiki/entities/owner/priorities.md
 ExecStart=/usr/bin/python3 -I %h/services/plow-agents/agents/cos/wake.py
