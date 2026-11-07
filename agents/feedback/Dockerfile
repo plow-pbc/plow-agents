@@ -12,7 +12,7 @@ RUN arch=$(dpkg --print-architecture) \
     && curl -fsSL https://github.com/cli/cli/releases/download/v2.92.0/gh_2.92.0_linux_$arch.tar.gz \
        | tar -xz --strip-components=2 -C /usr/local/bin gh_2.92.0_linux_$arch/bin/gh
 ENV UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/opt/uv-python
-RUN uv tool install --python 3.12 git+https://github.com/srosro/kitchen@066f05ff88bd691ab534e66cc35a4cb40a507161
+RUN uv tool install --python 3.12 git+https://github.com/srosro/kitchen@3edbd604785c5d5035a52c47c88e3d6aaf0ff0ad
 
 COPY swarm /usr/local/bin/swarm
 COPY CLAUDE.md /opt/feedback/CLAUDE.md
