@@ -4,9 +4,9 @@ What every chief-of-staff (CoS) kitchen runs.
 
 ## Priority nudges
 
-A CoS keeps the owner's top priorities moving: each has one blocker and one
-next step, and once an hour the CoS unblocks what it can and nudges whoever
-blocks the rest in the item's Swarm thread.
+A CoS keeps the owner's ranked priorities moving: each row waits on one
+member, and once an hour the CoS unblocks what it can and nudges whoever
+holds up the rest in the item's Swarm thread.
 
 - [`priorities/FORMAT.md`](priorities/FORMAT.md): the per-owner file. The data
   lives in the owner's private repository, never here.
