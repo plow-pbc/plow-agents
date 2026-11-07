@@ -29,9 +29,11 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
    the row only after they confirm.
 4. If anything changed, save it the way you read it:
    - git: commit (`priorities: rank <n> nudged/updated`) and push;
-   - wiki: set the frontmatter's `updated:` to today, then
-     `latch file put --host <host> <copy> '<path>'` and
-     `latch exec --host <host> --network -- wiki snapshot --push`.
+   - wiki: get the page again; if its `sha256` changed since your first get,
+     redo your row edits on the fresh copy. Set the frontmatter's `updated:`
+     to today, then `latch file put --host <host> <copy> '<path>'` and
+     `latch exec --host <host> --network -- wiki snapshot --push`. If either
+     fails, say so in your report.
 
    Report one line per nudge or skip to the owner's DM only when
    something moved; a wake with nothing due says nothing.
