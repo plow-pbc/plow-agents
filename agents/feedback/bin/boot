@@ -1,0 +1,36 @@
+#!/bin/bash
+# Refresh the operator's Claude config and the repo slots, then keep the
+# feedback sous running in tmux. Exits (and compose restarts it) if tmux dies.
+set -euo pipefail
+export PATH=$HOME/.local/bin:$PATH
+gh auth setup-git
+git config --global user.name >/dev/null || git config --global user.name "$(gh api user -q '.name // .login')"
+git config --global user.email >/dev/null || git config --global user.email "$(gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"')"
+
+clone() { [ -d "$2/.git" ] || git clone -q "https://github.com/$1" "$2"; }
+clone srosro/code-config ~/services/code-config
+git -C ~/services/code-config pull -q --ff-only
+(cd ~/services/code-config && just install-claude)
+for repo in $REPOS; do
+  for n in $(seq 0 $((SLOTS - 1))); do clone "$repo" ~/Hacking/"${repo#*/}$n"; done
+done
+
+# Claude's one-time onboarding, bypass and folder-trust prompts; trust on $HOME covers every slot.
+[ -f ~/.claude.json ] || echo '{}' >~/.claude.json
+jq --arg h "$HOME" '.hasCompletedOnboarding=true | .projects[$h].hasTrustDialogAccepted=true' \
+  ~/.claude.json >~/.claude.json.new && mv ~/.claude.json.new ~/.claude.json
+jq '.skipDangerousModePermissionPrompt=true' ~/.claude/settings.json >~/.claude/settings.json.new \
+  && mv ~/.claude/settings.json.new ~/.claude/settings.json
+
+mkdir -p ~/feedback && cp /opt/feedback/CLAUDE.md ~/feedback/CLAUDE.md
+tmux new-session -d -s feedback -c ~/feedback \
+  'while true; do kitchen open --model opus --resume || kitchen open --model opus; sleep 5; done'
+# The sous loads swarm as a development channel; confirm that dialog (its first
+# option is preselected) only while it is up, before Claude's welcome banner.
+while tmux has-session -t feedback 2>/dev/null; do
+  pane=$(tmux capture-pane -p -t feedback)
+  if grep -q "Loading development channels" <<<"$pane" && ! grep -q "Claude Code v" <<<"$pane"; then
+    tmux send-keys -t feedback Enter
+  fi
+  sleep 5
+done

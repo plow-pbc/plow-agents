@@ -2,7 +2,7 @@
 
 Build an agent image, run it on Plow, and text it from your phone.
 
-Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs.
+Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs, and [`agents/feedback/`](agents/feedback/) triages user feedback.
 
 ## What you need
 
