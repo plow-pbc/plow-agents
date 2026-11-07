@@ -18,7 +18,8 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
         21:00. Check with `TZ=<zone> date +%H:%M`.
    3. To nudge, reply in the row's `Thread` with `swarm send` (use its
       `--thread` flag), mentioning the owner and saying what you're waiting
-      on in one or two sentences. Set `Last nudged` to now, UTC.
+      on and which goal it serves (unless `none`) in one or two sentences.
+      Set `Last nudged` to now, UTC.
 3. Never remove a row yourself. Propose "done" to the file's owner; remove
    the row only after they confirm.
 4. If anything changed, commit the file (`priorities: rank <n> nudged/updated`)
