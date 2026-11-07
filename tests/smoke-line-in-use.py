@@ -55,7 +55,6 @@ class Stub(BaseHTTPRequestHandler):
     agent_get_status = 200
     rotate_status = 200
     delete_status = 200
-    posts: list[str] = []
     minted: list[dict] = []
     revoked: list[str] = []
     profile_updates: list[dict] = []
@@ -103,7 +102,6 @@ class Stub(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         Stub.requests.append(f"POST {self.path}")
-        Stub.posts.append(self.path)
         if self.path == "/v1/auth/activate":
             return self._send(200, {"display_code": "test", "activation_secret": "synthetic", "send_to": "+15555555555"})
         if self.path == "/v1/auth/activate/redeem":
