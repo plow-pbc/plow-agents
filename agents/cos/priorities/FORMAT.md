@@ -27,6 +27,7 @@ Owner timezone: America/Los_Angeles
   one a nudge mentions. `cos` when only the CoS itself is needed.
 - **Waiting on** is what that owner owes, in a few words.
 - **Update expected** is when an update is due: a date, a UTC time, or blank.
+  No nudge goes out before it; see [ROUTINE.md](ROUTINE.md).
 - **Next step (after done)** is what happens once the wait is over.
 - **Cadence** is `hourly` or `daily`: how often the owner may be nudged.
   Blank means `hourly`.

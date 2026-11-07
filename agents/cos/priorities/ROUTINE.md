@@ -7,7 +7,9 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
    1. **Unblock it yourself first.** If the owner is `cos`, or the wait is
       within your reach, do it, then update the row to what is left. If a
       reply in the item's thread changed who or what it waits on, record that too.
-   2. If it still waits on someone else, nudge only when both hold:
+   2. If it still waits on someone else, nudge only when all three hold:
+      - `Update expected` is blank or has passed. A date alone means the end
+        of that day in the file owner's timezone;
       - `Last nudged` is blank or its `Cadence` interval has passed: 60
         minutes for `hourly` (the default), 24 hours for `daily` (check
         with `date -u`);
