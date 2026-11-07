@@ -7,8 +7,8 @@ The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
      read it;
    - `latch:<host>:<path>`, a wiki page: fetch a copy with
      `latch file get --host <host> '<path>' <copy>` and work on it. If the
-     get fails (the host is unreachable), skip this run: append one line
-     (UTC time, host, error) to `$KITCHEN_NOTES/priorities-skips.log` and stop.
+     get fails (the host is unreachable), skip this run: log it with
+     `logger -t cos-priorities "skipped: <host> unreachable: <error>"` and stop.
 2. For each row, in rank order:
    1. **Unblock it yourself first.** If the owner is `cos`, or the wait is
       within your reach, do it, then update the row to what is left. If a
