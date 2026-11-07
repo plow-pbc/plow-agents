@@ -1,11 +1,10 @@
 # Feedback agent
 
 A kitchen in one container that triages every company's Plow Feedback room,
-files issues, and gets fixes built. [`CLAUDE.md`](CLAUDE.md) is the sous's
-role. Boot installs the operator's Claude config from
-[code-config](https://github.com/srosro/code-config), clones `SLOTS` checkouts
-of each repo in `REPOS` under `~/Hacking/`, and runs the sous in tmux. All
-state lives in the `home` volume, so rebuilds and restarts keep it.
+writes each fix worth building as a GitHub issue, and hands it to a builder
+agent in Swarm. It builds nothing itself. [`CLAUDE.md`](CLAUDE.md) is the
+sous's role; boot installs superpowers and runs the sous in tmux. All state
+lives in the `home` volume, so rebuilds and restarts keep it.
 
 ## Run it
 
@@ -19,10 +18,10 @@ docker compose up -d --build
 
 `secrets/feedback.env` holds:
 
-- `CLAUDE_CODE_OAUTH_TOKEN`: from `claude setup-token` on the Claude account the agent bills to.
-- `GH_TOKEN`: a token for the agent's own GitHub identity that can push
-  branches and open issues and PRs on the `REPOS`. Don't use a person's token:
-  approvals from it would look like theirs.
+- `CLAUDE_CODE_OAUTH_TOKEN` (optional): from `claude setup-token`. Without it,
+  log in once with `/login` in the sous; the login stays in the volume.
+- `GH_TOKEN`: a token for the agent's own GitHub identity, scoped to Issues
+  (read and write) and Contents (read) on the repos it files against.
 
 ## Give it Swarm accounts
 

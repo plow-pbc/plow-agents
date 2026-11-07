@@ -1,17 +1,12 @@
 # One feedback kitchen. Its home volume keeps Claude, swarm and kitchen state
-# and the repo slots across restarts and image rebuilds.
+# across restarts and image rebuilds.
 services:
   feedback:
     build: .
     image: plow-feedback-agent:local
     env_file: [./secrets/feedback.env]
-    environment:
-      REPOS: >-
-        plow-pbc/swarm plow-pbc/plow plow-pbc/latch-cli plow-pbc/plow-swarm-tauri
-        plow-pbc/plow-agents plow-pbc/kitchen-agents plow-pbc/user-research srosro/kitchen
-      SLOTS: 3
     volumes: [home:/home/agent]
-    mem_limit: 6g
+    mem_limit: 3g
     restart: unless-stopped
     stop_grace_period: 35s
 volumes:
