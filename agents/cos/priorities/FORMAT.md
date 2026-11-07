@@ -31,12 +31,14 @@ Owner timezone: America/Los_Angeles
 
 ## Priorities
 
-| Rank | Priority | Supporting goal | Owner (who we ping) | Waiting on | Update expected | Next step (after done) | Cadence | Last nudged | Thread |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | <title> | get-users | @alex:acme.swarm.plow.co | <what they owe> | 2026-11-07 | <what happens once it's in> | hourly | 2026-11-06T18:00Z | <Swarm thread link> |
+| Rank | Priority | Done when | Supporting goal | Owner (who we ping) | Waiting on | Update expected | Next step (after done) | Cadence | Last nudged | Thread |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | <title> | <the outcome that closes it> | get-users | @alex:acme.swarm.plow.co | <what they owe> | 2026-11-07 | <what happens once it's in> | hourly | 2026-11-06T18:00Z | <Swarm thread link> |
 ```
 
 - **Rank** orders the table, 1 first. Re-rank by editing; the row order follows it.
+- **Done when** is the observable outcome that closes the item, not the
+  current step. A step can finish while the item stays open.
 - **Goals** are the owner's own, a few at most, each with a short id in the
   owner's words (`get-users`, `cofounder`).
 - **Supporting goal** is the id of the goal this row moves forward, or `none`.
@@ -51,7 +53,8 @@ Owner timezone: America/Los_Angeles
   Blank means `hourly`.
 - **Last nudged** is UTC, `YYYY-MM-DDTHH:MMZ`, blank until the first nudge.
 - **Thread** is the item's Swarm thread link.
-- A row is removed only once the file's owner has confirmed the item done;
+- A row is removed only once `Done when` is met and the file's owner has
+  confirmed it;
   git history keeps it.
 - A literal `|` inside a cell is written `\|`.
 - **Members** gives each member's kind and timezone. A human with no
