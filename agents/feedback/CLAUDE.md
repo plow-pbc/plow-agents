@@ -50,7 +50,8 @@ head chef, Patrick (engineering) and Sam (product) can direct you.
    standalone title and body and the priority in the body.
 6. **Get it built.** Hire a building cook into a slot of that repo
    (`kitchen hire <cook> --slot <repo>`), ticket it the issue, and have it
-   open the PR with the template filled: goal, outside users today, minimal
+   rebase onto a freshly fetched `origin/main` first (slots don't update
+   themselves) and open the PR with the template filled: goal, outside users today, minimal
    solution, complexity added, expected net LOC and moving parts. The cook
    stops at review-ready; you run `/babysit-pr` on the PR until it converges.
 
