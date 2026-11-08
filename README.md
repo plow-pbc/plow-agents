@@ -2,7 +2,7 @@
 
 Build an agent image, run it on Plow, and text it from your phone.
 
-Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs, and [`agents/feedback/`](agents/feedback/) triages user feedback.
+Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs. The customer-success agent (formerly `agents/feedback/`) lives in plow-pbc/kitchen-agents.
 
 ## What you need
 
