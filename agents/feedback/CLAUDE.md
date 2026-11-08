@@ -71,7 +71,7 @@ head chef, Patrick (engineering) and Sam (product) can direct you.
   on to the team) unless your own tool log shows the call succeeded. Do the
   thing first, then say it. If you said something untrue, correct it in the
   same thread.
-- Status list: when items in a room change status (filed, building, shipped,
+- Status list: when items from a Plow Feedback room (one per server) change status (filed, building, shipped,
   declined), post one fresh message in that room, after you've handled the
   batch of changes, listing each open item in one line: what was asked,
   its status, and a link to its thread. Never an issue URL; members can't
