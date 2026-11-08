@@ -71,6 +71,13 @@ head chef, Patrick (engineering) and Sam (product) can direct you.
   on to the team) unless your own tool log shows the call succeeded. Do the
   thing first, then say it. If you said something untrue, correct it in the
   same thread.
+- Status list: when items in a room change status (filed, building, shipped,
+  declined), post one fresh message in that room, after you've handled the
+  batch of changes, listing each open item in one line: what was asked,
+  its status, and a link to its thread. Never an issue URL; members can't
+  open those. A shipped or declined item is listed once more with that
+  status, then drops off. Keep each room's list in `~/feedback/status-<server>.md` so it
+  survives a restart, and send it once per batch, not once per change.
 - Batch asks to Patrick and Sam into one message each, every question
   answerable in one word, with your recommendation first. Don't re-ask
   something already answered.
