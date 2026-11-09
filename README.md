@@ -1,14 +1,15 @@
 # plow-agents
 
-Build an agent image, run it on Plow, and text it from your phone.
+Build and publish an agent image for Plow, and set your account's public profile.
+
+Creating, listing and removing agents is [latch](https://github.com/plow-pbc/latch-cli)'s job; see [Moving from plow-agents](https://github.com/plow-pbc/latch-cli/blob/main/docs/site/connect-an-agent.md#moving-from-plow-agents) if you used `lines`, `agents`, `mint`, `deploy`, `revoke` or `rotate` here.
 
 Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs. The customer-success agent (formerly `agents/feedback/`) lives in plow-pbc/kitchen-agents.
 
 ## What you need
 
 [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, Docker, a registry account that can publish public images,
-and a phone that can send an activation text. For local runs, use Docker Compose
-2.24 or newer and an agent repository with a Dockerfile and `compose.yml`.
+and a phone that can send an activation text.
 
 Your agent reads `PLOW_API_BASE` from its environment; if `PLOW_AGENT_TOKEN` is set,
 send it as a bearer. See the [image contract](https://github.com/plow-pbc/plow/blob/main/api/cloud-agents/README.md).
@@ -19,14 +20,10 @@ send it as a bearer. See the [image contract](https://github.com/plow-pbc/plow/b
 git clone https://github.com/plow-pbc/plow-agents.git
 export PATH="$PWD/plow-agents/bin:$PATH"
 plow-agents login
-plow-agents lines
 ```
 
-Text the activation phrase to the number printed by `login`. The `lines` command
-shows the phone lines an agent can be deployed on: any account may claim an unheld line. Keep the ID of a
-`free` line for step 5. A line held by another account is `in use`; your own
-agent is shown by its uid. An older API that does not report availability shows
-`unknown` instead of claiming that a line is free.
+Text the activation phrase to the number printed by `login`. This login is for
+publishing images and setting your profile; agents use latch's own login.
 
 ## 2. Write a Dockerfile
 
@@ -66,41 +63,11 @@ plow-agents image push ghcr.io/YOUR_ACCOUNT/my-agent:v1
 After the first push, make the package public in GitHub package settings; otherwise Plow’s anonymous pull fails.
 Copy the full `repository@sha256:…` reference printed on the last line.
 
-## 5. Request an agent
+## 5. Run it
 
-Replace `ln_xxx` with the free line ID from step 1 and use the reference from step 4:
-
-```sh
-plow-agents deploy ghcr.io/YOUR_ACCOUNT/my-agent@sha256:… --line ln_xxx
-plow-agents agents
-```
-
-You can also deploy an agent image with `plow-agents deploy exe:hermes --line ln_xxx`.
-
-## 6. Text it
-
-Run `plow-agents agents` until the status is `running`. Text the number shown by
-`plow-agents lines`. A `failed` status includes the failure code beside it.
-
-## 7. Run it locally
-
-Copy [compose.example.yml](compose.example.yml) into your agent repository as
-`compose.yml`, then choose a free line:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/plow-pbc/plow-agents/main/compose.example.yml -o compose.yml
-plow-agents lines
-plow-agents deploy --local --line ln_xxx
-docker compose logs -f
-```
-
-If the container reaches your API at a different address, pass
-`--agent-api-base URL` to `plow-agents deploy --local`. When finished:
-
-```sh
-plow-agents revoke
-docker compose down -v
-```
+Run the image as an agent with latch (linked at the top): on Plow, or on your own
+machine with [compose.example.yml](compose.example.yml) (Docker Compose 2.24 or
+newer) copied into your agent repository as `compose.yml`.
 
 ## Register, admit, then promote an agent image
 
@@ -205,21 +172,14 @@ plow-agents profile --show
 
 | Command | Purpose |
 | --- | --- |
-| `plow-agents login` | Log in by text. |
-| `plow-agents lines` | Show the phone lines an agent can be deployed on, with IDs, numbers, and availability. |
+| `plow-agents login` | Log in by text, for publishing images and the profile. |
 | `plow-agents profile [--name NAME] [--photo PHOTO] [--show]` | Set or show your profile; a photo can be a file or HTTPS URL. |
-| `plow-agents mint LINE [--credential-file PATH] [--agent-api-base URL]` | Write a credential for a self-hosted agent. |
-| `plow-agents rotate [--credential-file PATH]` | Replace the credential; recreate the container to load it. |
-| `plow-agents revoke [LINE] [--credential-file PATH]` | Retire any agent on LINE, or the credential-file self-hosted agent. |
 | `plow-agents image build [IMAGE]` | Build the current directory for linux/amd64. |
 | `plow-agents image push [IMAGE] [--promote SLUG]` | Push and print the digest, or promote that exact digest to an agent image. |
 | `plow-agents image show SLUG` | Public combined view of the Plow pin and Agent Index listing. |
 | `plow-agents image promote SLUG REF \| --none [--owner UID]` | Admit with an explicit owner, or update an existing pin; mirror to the Index. |
 | `plow-agents image set SLUG [--name --blurb --repo --video --link --screenshot]` | Claim or edit Index metadata; never create a Plow row. |
 | `plow-agents image set SLUG [--phrase --owner --enabled/--disabled]` | Admin-only Plow metadata; repeat --phrase for multiple phrases. |
-| `plow-agents deploy TARGET --line LINE` | Request an image@sha256:… or an `exe:slug` agent image. |
-| `plow-agents deploy --local --line LINE [--agent-api-base URL]` | Mint a credential and start Compose locally. |
-| `plow-agents agents` | Show tab-separated line, target, and status. |
 
 Every command accepts `--help`. Global `--api-base URL`, `--index-base URL` and `--token-file PATH`
 options go before the command.
