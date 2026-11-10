@@ -3,8 +3,8 @@
 import json, os, pathlib, socket, time
 
 routine = pathlib.Path(__file__).resolve().parent / "priorities/ROUTINE.md"
-sock, data = os.environ["KITCHEN_SOCK"], os.environ["PRIORITIES_FILE"]
-text = f"Priority nudge run (scheduled). Follow {routine} against {data}."
+sock, room = os.environ["KITCHEN_SOCK"], os.environ["PRIORITIES_ROOM"]
+text = f"Priority nudge run (scheduled). Follow {routine} against {room}."
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.connect(sock)
 s.sendall(json.dumps({"cook": "cos-priorities", "summary": text,

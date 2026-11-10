@@ -3,10 +3,8 @@ Description=Wake the CoS sous for the priority nudge routine
 
 [Service]
 Type=oneshot
-# Edit all three for your CoS: its kitchen socket, the owner's file, and this
-# repo's deployed clone. The file is a path in a checkout of the private data
-# repo, or a wiki page on the owner's Mac as latch:<host>:<path>, e.g.
-# latch:mba:~/Plow/wiki/entities/owner/priorities.md
+# Edit all three for your CoS: its kitchen socket, the Swarm room holding the
+# priorities, and this repo's deployed clone.
 Environment=KITCHEN_SOCK=%h/.claude-kitchen/kitchen-agents-cos/kitchen.sock
-Environment=PRIORITIES_FILE=latch:mba:~/Plow/wiki/entities/owner/priorities.md
+Environment=PRIORITIES_ROOM=#general
 ExecStart=/usr/bin/python3 -I %h/services/plow-agents/agents/cos/wake.py
