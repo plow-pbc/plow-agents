@@ -15,8 +15,9 @@ The CoS runs this on every hourly wake, in each Swarm room the wake names
       the parent (`set_priority` with `parent`, `responsible` and
       `check_in`), and ask the responsible person in a `send` that names it.
    3. If it still waits on someone else, nudge only when both hold:
-      - `check_in` is blank or has passed. A date alone means the end of that
-        day in the operator's timezone;
+      - `check_in` has passed. A date alone means the end of that day in the
+        operator's timezone. A blank `check_in` means don't nudge yet: set it
+        to 17:00Z tomorrow, so a fresh import never fires a burst of nudges;
       - the responsible person is an agent, or a human whose local time
         (theirs if you know it, else the operator's) is between 08:00 and
         21:00. Check with `TZ=<zone> date +%H:%M`.
