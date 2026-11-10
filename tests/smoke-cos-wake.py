@@ -5,7 +5,7 @@ WAKE = pathlib.Path(__file__).resolve().parent.parent / "agents/cos/wake.py"
 
 with tempfile.TemporaryDirectory() as d:
     path = os.path.join(d, "kitchen.sock")
-    env = {**os.environ, "KITCHEN_SOCK": path, "PRIORITIES_FILE": "/d/so.md"}
+    env = {**os.environ, "KITCHEN_SOCK": path, "PRIORITIES_ROOM": "#general"}
 
     dead = subprocess.run([sys.executable, "-I", str(WAKE)], env=env, capture_output=True)
     assert dead.returncode != 0, "a wake with no kitchen listening must fail the unit"
@@ -24,5 +24,5 @@ with tempfile.TemporaryDirectory() as d:
 
     msg = json.loads(got[0])
     assert msg["cook"] == "cos-priorities", msg
-    assert str(WAKE.parent / "priorities/ROUTINE.md") in msg["summary"] and "/d/so.md" in msg["summary"], msg
+    assert str(WAKE.parent / "priorities/ROUTINE.md") in msg["summary"] and "#general" in msg["summary"], msg
 print("ok: cos wake")

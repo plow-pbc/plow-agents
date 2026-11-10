@@ -1,44 +1,31 @@
 # Priority nudge routine
 
-The CoS runs this on every hourly wake. The file follows [FORMAT.md](FORMAT.md).
+The CoS runs this on every hourly wake, against the Swarm room the wake names
+(company priorities live in `#general`).
 
-1. Read the owner's file. The wake names it one of two ways:
-   - a path in a checkout of the private data repository: `git pull`, then
-     read it;
-   - `latch:<host>:<path>`, a wiki page: fetch a copy with
-     `latch file get --host <host> '<path>' <copy>` and work on it. If the
-     get fails (the host is unreachable), skip this run: log it with
-     `logger -t cos-priorities "skipped: <host> unreachable: <error>"` and stop.
-2. For each row, in rank order:
-   1. **Unblock it yourself first.** If the owner is `cos`, or the wait is
-      within your reach, do it, then update the row to what is left. If a
-      reply in the item's thread changed who or what it waits on, record that too.
-   2. **Hand off when a step finishes but `Done when` isn't met.** Pick the
-      next task and its owner, ask them in the row's `Thread`, and set
-      `Update expected` to when you'll check in. Update the row: `Owner`,
-      `Waiting on` and `Next step` to the new task.
-   3. If it still waits on someone else, nudge only when all three hold:
-      - `Update expected` is blank or has passed. A date alone means the end
-        of that day in the file owner's timezone;
-      - `Last nudged` is blank or its `Cadence` interval has passed: 60
-        minutes for `hourly` (the default), 24 hours for `daily` (check
-        with `date -u`);
-      - the owner is an agent, or a human whose local time (their
-        timezone from Members, else the file owner's) is between 08:00 and
+1. Read the room's open priorities with the Swarm `priorities` tool
+   (`{room}`), then each one's chain and blocking task (`{ref}`). If the read
+   fails, log `logger -t cos-priorities "skipped: <error>"` and stop.
+2. For each priority, in rank order, take its blocking task, or the priority
+   itself when it has no open child:
+   1. **Unblock it yourself first.** If you are responsible, or the wait is
+      within your reach, do it, then `set_priority` it to what is left.
+   2. **Hand off when a task is done but its parent's done-when isn't met.**
+      Create the next task under the parent (`set_priority` with `parent`,
+      `responsible` and `check_in`), and ask the responsible person in a
+      `send` that names the new task.
+   3. If it still waits on someone else, nudge only when both hold:
+      - `check_in` is blank or has passed. A date alone means the end of that
+        day in the operator's timezone;
+      - the responsible person is an agent, or a human whose local time
+        (theirs if you know it, else the operator's) is between 08:00 and
         21:00. Check with `TZ=<zone> date +%H:%M`.
-   4. To nudge, reply in the row's `Thread` with `swarm send` (use its
-      `--thread` flag), mentioning the owner and saying what you're waiting
-      on in one or two sentences. Set `Last nudged` to now, UTC.
-3. Never remove a row yourself. Close it only when `Done when` is met:
-   propose "done" to the file's owner, and remove the row after they confirm.
-4. If anything changed, save it the way you read it:
-   - git: commit (`priorities: rank <n> nudged/updated`) and push;
-   - wiki: get the page again; if its `sha256` changed since your first get,
-     redo your row edits on the fresh copy. Set the frontmatter's `updated:`
-     to today, then `latch file put --host <host> <copy> '<path>'` and
-     `latch exec --host <host> --network --write '~/Plow/wiki.git' -- wiki snapshot --push`
-     (the snapshot commits into the wiki's git directory). If either fails,
-     say so in your report.
+   4. To nudge, `send` in the priority's room, naming its ref and mentioning
+      the responsible person, saying what you're waiting on in one or two
+      sentences. Then move `check_in` to the next time you'd nudge again
+      (an hour out by default, a day out for anything less urgent).
+3. Never mark a priority done until its done-when is met: propose "done" to
+   whoever is accountable, and set `status: done` after they confirm.
 
-   Report one line per nudge or skip to the owner's DM only when
-   something moved; a wake with nothing due says nothing.
+Report one line per nudge or skip to the owner's DM only when something
+moved; a wake with nothing due says nothing.
