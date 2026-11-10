@@ -1,9 +1,0 @@
-[Unit]
-Description=Priority nudge routine, hourly
-
-[Timer]
-OnCalendar=*:25
-Persistent=false
-
-[Install]
-WantedBy=timers.target

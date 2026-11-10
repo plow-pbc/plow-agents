@@ -13,4 +13,3 @@ jobs:
       - run: python3 tests/smoke-account.py
       - run: python3 tests/smoke-image-build.py
       - run: python3 tests/smoke-agent-images.py
-      - run: python3 tests/smoke-cos-wake.py
