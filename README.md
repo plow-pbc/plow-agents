@@ -4,7 +4,7 @@ Build and publish an agent image for Plow, and set your account's public profile
 
 Creating, listing and removing agents is [latch](https://github.com/plow-pbc/latch-cli)'s job; see [Moving from plow-agents](https://github.com/plow-pbc/latch-cli/blob/main/docs/site/connect-an-agent.md#moving-from-plow-agents) if you used `lines`, `agents`, `mint`, `deploy`, `revoke` or `rotate` here.
 
-Agent templates live under [`agents/`](agents/): [`agents/cos/`](agents/cos/) is what every chief-of-staff kitchen runs. The customer-success agent (formerly `agents/feedback/`) lives in plow-pbc/kitchen-agents.
+Kitchen agents (the chief-of-staff sous and its priority nudge, customer success) live in [plow-pbc/kitchen-agents](https://github.com/plow-pbc/kitchen-agents).
 
 ## What you need
 
