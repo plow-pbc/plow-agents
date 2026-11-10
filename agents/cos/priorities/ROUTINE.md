@@ -1,9 +1,9 @@
 # Priority nudge routine
 
-The CoS runs this on every hourly wake, against the Swarm room the wake names
+The CoS runs this on every hourly wake, in each Swarm room the wake names
 (company priorities live in `#general`).
 
-1. Read the room's open priorities with the Swarm `priorities` tool
+1. Read each room's open priorities with the Swarm `priorities` tool
    (`{room}`), then each one's chain and blocking task (`{ref}`). If the read
    fails, log `logger -t cos-priorities "skipped: <error>"` and stop.
 2. For each priority, in rank order, take its blocking task, or the priority

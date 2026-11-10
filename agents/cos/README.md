@@ -12,7 +12,7 @@ holds up the rest.
 - `wake.py` and `systemd/`: the hourly wake. It writes one line into the CoS
   kitchen's socket, the same way kitchen cooks report back.
 
-Install for a CoS kitchen (first edit the socket, room and `ExecStart` paths in the service):
+Install for a CoS kitchen (first edit the socket, rooms and `ExecStart` paths in the service):
 
 ```sh
 cp agents/cos/systemd/cos-priorities.{service,timer} ~/.config/systemd/user/
