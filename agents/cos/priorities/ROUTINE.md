@@ -10,10 +10,10 @@ The CoS runs this on every hourly wake, against the Swarm room the wake names
    itself when it has no open child:
    1. **Unblock it yourself first.** If you are responsible, or the wait is
       within your reach, do it, then `set_priority` it to what is left.
-   2. **Hand off when a task is done but its parent's done-when isn't met.**
-      Create the next task under the parent (`set_priority` with `parent`,
-      `responsible` and `check_in`), and ask the responsible person in a
-      `send` that names the new task.
+   2. **Hand off when a task's done-when is met.** Close it per step 3.
+      If its parent's done-when still isn't met, create the next task under
+      the parent (`set_priority` with `parent`, `responsible` and
+      `check_in`), and ask the responsible person in a `send` that names it.
    3. If it still waits on someone else, nudge only when both hold:
       - `check_in` is blank or has passed. A date alone means the end of that
         day in the operator's timezone;
