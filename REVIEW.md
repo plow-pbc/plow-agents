@@ -6,11 +6,12 @@ themselves and is deliberately not restated here.
 
 ## What this repo is
 
-**The way a developer runs one of the Plow agent images on a machine of their
-own.** One stdlib-only Python CLI over the credential lifecycle — `login`,
-`lines`, `mint`, `revoke` — plus a minimal `compose.example.yml` to
-copy into a new agent repository. It builds and mints; it does not own the
-image, the API, or the container.
+**The way a developer publishes a Plow agent image.** One stdlib-only Python
+CLI — `login` (publishing only), `image`, `profile` — plus a minimal
+`compose.example.yml` to copy into a new agent repository. It builds and
+publishes; it does not own the image, the API, the container, or the agent
+lifecycle (creating, listing and removing agents is latch's). `agents/<name>/` holds agent templates
+(prompts, routines, their wake units); their data lives in private repos.
 
 **Stage:** pre-PMF, a single operator, a handful of agents. Iteration speed
 beats hardening for scale: prefer loud failures to fallbacks, and don't guard
