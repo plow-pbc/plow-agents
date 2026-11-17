@@ -17,6 +17,15 @@ lifecycle (creating, listing and removing agents is latch's). `agents/<name>/` h
 beats hardening for scale: prefer loud failures to fallbacks, and don't guard
 edge cases this size cannot reach.
 
+**Ideal customer:** today, the single operator publishing and maintaining a
+handful of Plow agent images.
+
+**#1 priority: keep code complexity down.** Cut feature creep and
+over-engineering, keep logic DRY, and prefer one obvious path with few
+conditionals. For open-ended interpretation, prefer model judgment over
+brittle regex or keyword rules. Optimize for rapid iteration toward
+product-market fit and code that is easy to delete.
+
 **Neighbours:** `plow-pbc/plow` owns the API and `cli/plow`;
 `plow-pbc/plow-hermes-agent` owns the base image and its boot contract;
 `plow-pbc/agent-mgr` still owns container lifecycle until `agent-mgr#130`
