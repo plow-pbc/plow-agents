@@ -7,8 +7,7 @@ services:
         required: false
     volumes:
       # The agent's home, kept across `up`/`down` for its sessions and setup.
-      # `docker compose down -v` starts this agent fresh, and is what an edit
-      # to SOUL.md needs before the agent sees it.
+      # `docker compose down -v` starts this agent fresh.
       - agent-home:/var/lib/hermes
     # The agent checkpoints on SIGTERM; its supervisor allows 30s, and Docker's default 10s cuts it off and orphans the transcript lease.
     stop_grace_period: 35s
